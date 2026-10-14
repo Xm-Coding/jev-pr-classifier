@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowUpRight, ArrowRight, GitPullRequest, Link2, LoaderCircle, AlertCircle, Check, ChevronDown, Copy, FileCode2, GitBranch, ShieldCheck, Sparkles, X, SlidersHorizontal } from "lucide-react";
 import { CATEGORIES } from "../lib/rubric.ts";
 import type { AnalysisResult } from "../lib/contracts.ts";
+import { requestSite, SiteRequestError } from "../lib/client-api.ts";
+import type { ServiceStatus } from "../lib/service-status.ts";
 
 const examples = [{ name: "GitHub", url: "https://github.com/psf/requests/pull/7628" }, { name: "Gitee", url: "https://gitee.com/dromara/sa-token/pulls/378" }, { name: "GitCode", url: "https://gitcode.com/openeuler/docs/merge_requests/635" }];
 const percent = (p: number) => `${(p * 100).toFixed(p > 0 && p < 0.01 ? 2 : 1)}%`;
@@ -14,22 +16,23 @@ export default function ClassifierUI() {
   const [result, setResult] = useState<AnalysisResult | null>(null); const [error, setError] = useState("");
   const [elapsed, setElapsed] = useState(0); const [copied, setCopied] = useState(false);
   const [threshold, setThreshold] = useState(0.85); const [model, setModel] = useState("jev-1.13.0");
-  const [ready, setReady] = useState<boolean | null>(null);
+  const [service, setService] = useState<ServiceStatus | null>(null);
+  const [connectionError, setConnectionError] = useState("");
+  const [errorCode, setErrorCode] = useState(""); const [requestId, setRequestId] = useState("");
   const controller = useRef<AbortController | null>(null); const serial = useRef(0);
-  useEffect(() => { const abort = new AbortController(); fetch("/api/status", { signal: abort.signal }).then(r => r.json()).then(value => { const data = value as {ready: boolean; model: string}; setReady(data.ready); setModel(data.model); }).catch(() => {}); return () => abort.abort(); }, []);
+  useEffect(() => { const abort = new AbortController(); requestSite<ServiceStatus>("/api/status", { signal: abort.signal }).then(data => { setService(data); setModel(data.model); }).catch(e => { if (!abort.signal.aborted) setConnectionError(e instanceof Error ? e.message : "工作台连接检查失败。"); }); return () => abort.abort(); }, []);
   useEffect(() => { if (!busy) return; const start = Date.now(); const timer = setInterval(() => setElapsed((Date.now() - start) / 1000), 100); return () => clearInterval(timer); }, [busy]);
   useEffect(() => () => controller.current?.abort(), []);
   async function analyze(event: React.FormEvent) {
     event.preventDefault(); if (!url.trim() || busy) return;
     const id = ++serial.current; const abort = new AbortController(); controller.current = abort;
     const timeout = setTimeout(() => abort.abort("timeout"), 150_000);
-    setBusy(true); setElapsed(0); setError(""); setResult(null);
+    setBusy(true); setElapsed(0); setError(""); setErrorCode(""); setRequestId(""); setResult(null);
     try {
-      const response = await fetch("/api/classify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: url.trim() }), signal: abort.signal });
-      const data = await response.json() as AnalysisResult & {error?: {message?: string}}; if (!response.ok) throw new Error(data?.error?.message ?? "分析暂时失败，请重试。");
+      const data = await requestSite<AnalysisResult>("/api/classify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: url.trim() }), signal: abort.signal });
       if (serial.current === id) { setResult(data); setModel(data.model); }
     } catch (e) {
-      if (serial.current === id) setError(abort.signal.aborted ? "等待超时，请稍后重试。" : e instanceof Error ? e.message : "分析暂时失败，请重试。");
+      if (serial.current === id) { setError(abort.signal.aborted ? "等待超时，请稍后重试。" : e instanceof Error ? e.message : "分析暂时失败，请重试。"); if (e instanceof SiteRequestError) { setErrorCode(e.code); setRequestId(e.requestId || ""); } }
     } finally { clearTimeout(timeout); if (serial.current === id) setBusy(false); }
   }
   function cancel() { ++serial.current; controller.current?.abort(); setBusy(false); setError(""); }
@@ -40,18 +43,19 @@ export default function ClassifierUI() {
   }
   const ranked = result ? [...CATEGORIES].sort((a, b) => result.probabilities[b.id] - result.probabilities[a.id]) : [];
   const meetsThreshold = result && result.inputComplete && result.confidence >= threshold;
+  const connectionLabel = result ? "分类调用成功" : connectionError ? "工作台连接失败" : !service ? "正在检查连接" : service.availability === "reachable" ? "API 可达" : "连接不可用";
   return (
     <div className="app-shell">
       <header className="topbar"><a href="/" className="brand" aria-label="PR 分类工作台首页"><span className="brand-mark"><GitPullRequest size={20} strokeWidth={2.2} /></span><span>PR Lens<span className="brand-divider">/</span><span className="brand-caption">分类工作台</span></span></a><div className="topbar-right"><span className="prototype-tag">PROTOTYPE</span><a href="https://docs.typesafe.ai/introduction" target="_blank" rel="noreferrer">TypeSafe 文档 <ArrowUpRight size={14} /></a></div></header>
       <main className="main-wrap">
-        <div className="heading-row"><div><div className="eyebrow"><span className="tiny-dot" /> POWERED BY JEV</div><h1>每次改动，都有清晰归类。</h1><p className="intro">提交一个 PR 链接，查看它的主要类别、完整概率分布与模型置信度。</p></div><div className="model-badge"><Sparkles size={15} /><span>{model}</span><span className={`connection-dot ${ready === false ? "not-ready" : ""}`} title={ready ? "服务端已配置" : "配置检查"} /></div></div>
+        <div className="heading-row"><div><div className="eyebrow"><span className="tiny-dot" /> POWERED BY JEV</div><h1>每次改动，都有清晰归类。</h1><p className="intro">提交一个 PR 链接，查看它的主要类别、完整概率分布与模型置信度。</p></div><div className="model-badge"><Sparkles size={15} /><span>{model}</span><span className={`connection-dot ${result || service?.availability === "reachable" ? "" : "not-ready"}`} title={service?.message || connectionError || "正在验证服务连接"} /><span className="connection-label">{connectionLabel}</span></div></div>
         <div className="workspace-grid">
           <aside className="input-column">
             <section className="panel input-panel">
               <div className="panel-label"><span className="step-number">01</span><h2>输入 PR 链接</h2></div><p className="panel-description">从公开仓库读取标题、描述与代码 diff。</p>
               <form onSubmit={analyze}><label htmlFor="pr-url" className="field-label">Pull Request URL</label><div className="url-input-wrap"><Link2 size={17} /><input id="pr-url" type="url" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://github.com/owner/repo/pull/123" autoComplete="off" spellCheck={false} required disabled={busy} aria-describedby="url-help" />{url && !busy && <button type="button" className="clear-button" onClick={() => { setUrl(""); setError(""); }} aria-label="清空链接"><X size={14} /></button>}</div><p id="url-help" className="field-help"><GitBranch size={13} /> GitHub <span>·</span> Gitee <span>·</span> GitCode / AtomGit</p><button type="submit" className="analyze-button" disabled={busy || !url.trim()}>{busy ? <LoaderCircle className="spin" size={18} /> : <Sparkles size={17} />}{busy ? "正在分析" : "分析这个 PR"}{!busy && <ArrowRight size={17} className="button-arrow" />}</button></form>
               <div className="examples-row"><span>试一个公开 PR</span>{examples.map(example => <button key={example.name} disabled={busy} onClick={() => { setUrl(example.url); setError(""); }}>{example.name} <ArrowUpRight size={12} /></button>)}</div>
-              {ready === false && <div className="inline-error"><AlertCircle size={16} /><span>服务端尚未配置 Jev API key。</span></div>}{error && <div role="alert" className="inline-error"><AlertCircle size={17} /><span>{error}</span></div>}<div className="server-note"><ShieldCheck size={15} /><span>API key 仅在服务端使用</span></div>
+              {!error && !result && (connectionError || (service && service.availability !== "reachable")) && <div role="status" className="inline-error"><AlertCircle size={16} /><span>{connectionError || service?.message}</span></div>}{error && <div role="alert" className="inline-error"><AlertCircle size={17} /><div><span>{error}</span>{errorCode && <div className="error-reference">错误码：{errorCode}</div>}{requestId && <div className="error-reference">请求编号：{requestId}</div>}{errorCode.startsWith("SITE_") && <a className="error-login" href="/signin-with-chatgpt?return_to=%2F" target="_top">重新登录工作台 <ArrowUpRight size={12} /></a>}</div></div>}<div className="server-note"><ShieldCheck size={15} /><span>API key 仅在服务端使用</span></div>
             </section>
             <section className="panel workflow-panel"><span className="small-label">HOW IT WORKS</span><div className="flow-item"><span className="flow-icon"><Link2 size={15} /></span><div><strong>读取改动</strong><p>提取 PR 描述与文件 diff</p></div></div><div className="flow-item"><span className="flow-icon"><Sparkles size={15} /></span><div><strong>交给 Jev 判断</strong><p>按固定七类规则选择主类别</p></div></div><div className="flow-item"><span className="flow-icon"><GitPullRequest size={15} /></span><div><strong>查看概率与置信度</strong><p>保留模型原始返回数值</p></div></div></section>
           </aside>

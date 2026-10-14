@@ -113,7 +113,9 @@ export async function classifyPR(url: unknown, config: RuntimeConfig, fetcher: F
 }
 
 export async function handleClassify(request: Request, config: RuntimeConfig, fetcher: Fetcher = fetch) {
-  const responseHeaders = { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" };
+  const suppliedId = request.headers.get("x-request-id");
+  const requestId = suppliedId && /^[a-f0-9-]{36}$/i.test(suppliedId) ? suppliedId : crypto.randomUUID();
+  const responseHeaders = { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "X-Request-ID": requestId };
   try {
     if (request.method !== "POST") throw new AppError("METHOD_NOT_ALLOWED", "请使用 POST 请求。", 405);
     const origin = request.headers.get("origin");
@@ -125,6 +127,7 @@ export async function handleClassify(request: Request, config: RuntimeConfig, fe
     return Response.json(result, { headers: responseHeaders });
   } catch (error) {
     const e = error instanceof AppError ? error : new AppError("INTERNAL_ERROR", "分析暂时失败，请稍后重试。", 500);
-    return Response.json({ error: { code: e.code, message: e.message } }, { status: e.status, headers: responseHeaders });
+    const stage = e.code.startsWith("JEV_") || e.code === "KEY_NOT_CONFIGURED" ? "jev" : e.code.startsWith("SOURCE_") || e.code === "PR_NOT_FOUND" || e.code === "PR_TOO_LARGE" ? "pr_source" : "request";
+    return Response.json({ error: { code: e.code, message: e.message, stage, requestId } }, { status: e.status, headers: responseHeaders });
   }
 }

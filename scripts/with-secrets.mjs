@@ -23,7 +23,7 @@ if (mode === "check") {
 } else if (mode === "live-test") {
   const { classifyPR } = await import("../lib/classifier.ts");
   const config = { apiKey: process.env.TYPESAFE_API_KEY, model: process.env.TYPESAFE_MODEL || "jev-1.13.0" };
-  const urls = ["https://gitee.com/dromara/sa-token/pulls/378", "https://gitcode.com/openeuler/docs/merge_requests/635", "https://github.com/psf/requests/pull/7628"];
+  const urls = process.argv[3] ? [process.argv[3]] : ["https://gitee.com/dromara/sa-token/pulls/378", "https://gitcode.com/openeuler/docs/merge_requests/635", "https://github.com/psf/requests/pull/7628"];
   for (const url of urls) {
     try { const r = await classifyPR(url, config); console.log(JSON.stringify({ url, model: r.model, category: r.choice, confidence: r.confidence, probabilities: r.probabilities, files: r.pr.changedFiles, complete: r.inputComplete, warnings: r.warnings, tokens: r.usage.input_tokens, elapsedMs: r.elapsedMs })); }
     catch (e) { console.log(JSON.stringify({ url, error: e.code || "CONNECTION_FAILED", message: e.code ? e.message : "Live request failed" })); }

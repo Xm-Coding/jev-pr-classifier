@@ -3,6 +3,9 @@ import { handleClassify } from "../../../lib/classifier.ts";
 export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   const values = env as unknown as Record<string, string>;
-  return handleClassify(request, { apiKey: values.TYPESAFE_API_KEY, model: values.TYPESAFE_MODEL,
+  const response = await handleClassify(request, { apiKey: values.TYPESAFE_API_KEY, model: values.TYPESAFE_MODEL,
     githubToken: values.GITHUB_TOKEN, giteeToken: values.GITEE_TOKEN, gitcodeToken: values.GITCODE_TOKEN, atomgitToken: values.ATOMGIT_TOKEN });
+  const error = response.ok ? undefined : (await response.clone().json() as {error?: {code: string; stage: string}}).error;
+  console.info(JSON.stringify({ event: "pr-classify", requestId: response.headers.get("X-Request-ID"), status: response.status, code: error?.code, stage: error?.stage }));
+  return response;
 }

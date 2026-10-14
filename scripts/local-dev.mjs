@@ -1,10 +1,11 @@
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { handleClassify } from "../lib/classifier.ts";
+import { checkServiceStatus } from "../lib/service-status.ts";
 const config = { apiKey: process.env.TYPESAFE_API_KEY, model: process.env.TYPESAFE_MODEL || "jev-1.13.0", githubToken: process.env.GITHUB_TOKEN, giteeToken: process.env.GITEE_TOKEN, gitcodeToken: process.env.GITCODE_TOKEN, atomgitToken: process.env.ATOMGIT_TOKEN };
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost:5173");
-  if (url.pathname === "/api/status") { res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" }); res.end(JSON.stringify({ ready: Boolean(config.apiKey), model: config.model })); return; }
+  if (url.pathname === "/api/status") { res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" }); res.end(JSON.stringify(await checkServiceStatus(config))); return; }
   if (url.pathname !== "/api/classify") { res.writeHead(404); res.end(); return; }
   const chunks = []; let bytes = 0;
   for await (const chunk of req) { bytes += chunk.length; if (bytes > 4096) { res.writeHead(413); res.end(); return; } chunks.push(chunk); }
