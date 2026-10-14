@@ -40,7 +40,7 @@ async function readBounded(response: Response): Promise<string> {
 
 async function sourceRequest(url: string, label: string, headers: Record<string, string>, fetcher: Fetcher, json = true): Promise<any> {
   let response: Response;
-  try { response = await fetcher(url, { headers, redirect: "error", signal: AbortSignal.timeout(25_000) }); }
+  try { response = await fetcher(url, { headers, redirect: "manual", signal: AbortSignal.timeout(25_000) }); }
   catch { throw new AppError("SOURCE_UNAVAILABLE", `${label} 暂时无法连接，请稍后重试。`, 502); }
   if (!response.ok) {
     if (response.status === 404) throw new AppError("PR_NOT_FOUND", "没有找到这个 PR，或仓库并非公开可访问。", 404);

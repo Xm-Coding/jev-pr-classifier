@@ -76,7 +76,8 @@ export async function callJev(state: unknown, config: RuntimeConfig, fetcher: Fe
       response = await fetcher("https://api.typesafe.ai/v1/systemone", {
         method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.apiKey}` },
         body: JSON.stringify({ model, state, questions: { pr_category: CLASSIFICATION_QUESTION } }),
-        redirect: "error", signal: AbortSignal.timeout(45_000),
+        // Workers supports manual/follow in our runtime; never forward the key on redirects.
+        redirect: "manual", signal: AbortSignal.timeout(45_000),
       });
     } catch { throw new AppError("JEV_CONNECTION", "Jev 请求超时或连接失败，请稍后重试。", 502); }
     if (![429, 529].includes(response.status) || attempt === 2) break;

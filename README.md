@@ -8,6 +8,8 @@
 
 网页现在分别处理浏览器连接失败、登录跳转、网关非 JSON 响应和模型错误，显示错误码和请求编号，不再直接展示 `Failed to fetch`。登录跳转使用正常顶层导航；服务访问权限不变。`/api/status` 会从服务器检查 TypeSafe 模型接口连通性，仅配置 Key 不会显示已连通。模型接口可达也不代表某次推理已成功。分类请求日志只记录状态、错误码、阶段和请求编号，不记录 Key 或 PR 内容。
 
+排查发现托管代码使用 `redirect: "error"`，在本项目 Cloudflare Worker 运行时（2026-05-15 兼容日期）会直接抛出 `Invalid redirect value`，请求尚未发出。已把源平台与 TypeSafe 请求改为 `manual`；3xx 作为错误处理，禁止自动转发服务端凭据。增加真实 workerd 运行时契约验证，避免仅在 Node.js 中测试导致遗漏。
+
 本地运行需要 Node.js 24（项目测试使用 Node 的原生 TypeScript 支持）。执行：
 
 ```sh

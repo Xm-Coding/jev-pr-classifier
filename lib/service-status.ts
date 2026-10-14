@@ -4,7 +4,7 @@ export async function checkServiceStatus(config: RuntimeConfig, fetcher: Fetcher
   const base = { ready: Boolean(config.apiKey), model: config.model || "jev-1.13.0" };
   if (!config.apiKey) return { ...base, availability: "not_configured", code: "KEY_NOT_CONFIGURED", message: "服务端尚未配置 Jev API key。" };
   let response: Response;
-  try { response = await fetcher("https://api.typesafe.ai/v1/models", { headers: { Authorization: `Bearer ${config.apiKey}` }, redirect: "error", signal: AbortSignal.timeout(12_000) }); }
+  try { response = await fetcher("https://api.typesafe.ai/v1/models", { headers: { Authorization: `Bearer ${config.apiKey}` }, redirect: "manual", signal: AbortSignal.timeout(12_000) }); }
   catch { return { ...base, availability: "unavailable", code: "JEV_CONNECTION", message: "服务端暂时无法连接 TypeSafe，尚未验证模型调用。" }; }
   await response.body?.cancel();
   const upstreamStatus = response.status;
