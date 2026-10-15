@@ -6,6 +6,7 @@ import { CATEGORIES } from "../lib/rubric.ts";
 import type { AnalysisResult } from "../lib/contracts.ts";
 import { requestSite, SiteRequestError } from "../lib/client-api.ts";
 import type { ServiceStatus } from "../lib/service-status.ts";
+import BatchClassifier from "./batch-classifier.tsx";
 
 const examples = [{ name: "GitHub", url: "https://github.com/psf/requests/pull/7628" }, { name: "Gitee", url: "https://gitee.com/dromara/sa-token/pulls/378" }, { name: "GitCode", url: "https://gitcode.com/openeuler/docs/merge_requests/635" }];
 const percent = (p: number) => `${(p * 100).toFixed(p > 0 && p < 0.01 ? 2 : 1)}%`;
@@ -13,6 +14,7 @@ const seconds = (ms: number) => `${(ms / 1000).toFixed(2)}s`;
 const name = (id: string) => CATEGORIES.find(c => c.id === id)?.label ?? id;
 
 export default function ClassifierUI() {
+  const [mode, setMode] = useState<"single" | "batch">("single"); const [batchBusy, setBatchBusy] = useState(false);
   const [url, setUrl] = useState(""); const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null); const [error, setError] = useState("");
   const [elapsed, setElapsed] = useState(0); const [copied, setCopied] = useState(false);
@@ -50,7 +52,8 @@ export default function ClassifierUI() {
       <header className="topbar"><a href="/" className="brand" aria-label="PR 分类工作台首页"><span className="brand-mark"><GitPullRequest size={20} strokeWidth={2.2} /></span><span>PR Lens<span className="brand-divider">/</span><span className="brand-caption">分类工作台</span></span></a><div className="topbar-right"><span className="prototype-tag">PROTOTYPE</span><a href="https://docs.typesafe.ai/introduction" target="_blank" rel="noreferrer">TypeSafe 文档 <ArrowUpRight size={14} /></a></div></header>
       <main className="main-wrap">
         <div className="heading-row"><div><div className="eyebrow"><span className="tiny-dot" /> POWERED BY JEV</div><h1>每次改动，都有清晰归类。</h1><p className="intro">提交一个 PR 链接，查看它的主要类别、完整概率分布与模型置信度。</p></div><div className="model-badge"><Sparkles size={15} /><span>{model}</span><span className={`connection-dot ${result || service?.availability === "reachable" ? "" : "not-ready"}`} title={service?.message || connectionError || "正在验证服务连接"} /><span className="connection-label">{connectionLabel}</span></div></div>
-        <div className="workspace-grid">
+        <div className="analysis-mode-switch" role="group" aria-label="分析方式"><button type="button" aria-pressed={mode === "single"} disabled={busy || batchBusy} onClick={() => setMode("single")}>单个 PR</button><button type="button" aria-pressed={mode === "batch"} disabled={busy || batchBusy} onClick={() => setMode("batch")}>批量 PR</button></div>
+        {mode === "batch" ? <BatchClassifier threshold={threshold} onThresholdChange={setThreshold} onBusyChange={setBatchBusy} onModel={setModel} /> : <div className="workspace-grid">
           <aside className="input-column">
             <section className="panel input-panel">
               <div className="panel-label"><span className="step-number">01</span><h2>输入 PR 链接</h2></div><p className="panel-description">从公开仓库读取标题、描述与代码 diff。</p>
@@ -72,6 +75,7 @@ export default function ClassifierUI() {
             </>}
           </section>
         </div>
+        }
         <details className="rubric-section"><summary><span>本次使用的七类分类口径<span className="rubric-version">v1 · 初始定义</span></span><ChevronDown size={16} /></summary><div className="rubric-grid">{CATEGORIES.map(c => <div key={c.id}><strong>{c.label}</strong><p>{c.description}</p></div>)}</div></details>
         <footer className="footer"><span><ShieldCheck size={13} />仅用于分类试验，复核建议不等于平台审核通过。</span><a href="https://docs.typesafe.ai/confidence" target="_blank" rel="noreferrer">如何理解 confidence <ArrowUpRight size={12} /></a></footer>
       </main>
