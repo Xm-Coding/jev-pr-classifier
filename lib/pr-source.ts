@@ -71,6 +71,58 @@ export function parseUnifiedDiff(diff: string): Map<string, string> {
 }
 
 export async function fetchPR(location: PRLocation, config: RuntimeConfig, fetcher: Fetcher = fetch): Promise<PRRecord> {
+  try { return await fetchPRFromApi(location, config, fetcher); }
+  catch (error) {
+    // Public pages are a separate public data source. Never send credentials to them.
+    if (location.provider !== "github" || config.githubToken || !(error instanceof AppError) || error.code !== "SOURCE_ACCESS_LIMIT") throw error;
+    try { return await fetchGitHubPublic(location, fetcher); } catch { throw error; }
+  }
+}
+
+function decodeHtml(text: string): string {
+  return text.replace(/&(#x[\da-f]+|#\d+|amp|lt|gt|quot|apos|nbsp);/gi, (whole, entity: string) => {
+    const names: Record<string,string> = {amp:"&",lt:"<",gt:">",quot:'"',apos:"'",nbsp:" "};
+    if (entity[0] !== "#") return names[entity.toLowerCase()] ?? whole;
+    const n = entity[1].toLowerCase() === "x" ? parseInt(entity.slice(2),16) : parseInt(entity.slice(1),10);
+    return n > 0 && n <= 0x10ffff && !(n >= 0xd800 && n <= 0xdfff) ? String.fromCodePoint(n) : "";
+  });
+}
+
+export function parseGitHubPublicPage(html: string, location: PRLocation) {
+  const embedded = html.match(/<script\b[^>]*data-target=["']react-app\.embeddedData["'][^>]*>([\s\S]*?)<\/script>/i)?.[1];
+  let payload: any;
+  try { payload = JSON.parse(embedded || "").payload?.pullRequestsLayoutRoute; } catch { /* fail closed if GitHub changes its page format */ }
+  const pr = payload?.pullRequest; const repo = payload?.repository;
+  if (pr?.number !== location.number || typeof pr?.title !== "string" || String(repo?.ownerLogin).toLowerCase() !== location.owner.toLowerCase() || String(repo?.name).toLowerCase() !== location.repo.toLowerCase()) throw new AppError("SOURCE_FORMAT", "GitHub 公开页面的 PR 元数据无法确认。", 502);
+  const opening = /<div\b[^>]*class=["'][^"']*\bcomment-body\b[^"']*["'][^>]*>/i.exec(html);
+  let description = "";
+  if (opening) {
+    const start = opening.index + opening[0].length;
+    const tags = /<!--[\s\S]*?-->|<(\/?)div\b[^>]*>/gi; tags.lastIndex = start;
+    let depth = 1; let match: RegExpExecArray | null;
+    while ((match = tags.exec(html))) {
+      if (match[0].startsWith("<!--")) continue;
+      depth += match[1] ? -1 : 1;
+      if (!depth) { description = html.slice(start,match.index); break; }
+    }
+    description = decodeHtml(description.replace(/<!--[\s\S]*?-->/g, "").replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, "").replace(/<\/(?:p|h[1-6]|li|pre|div)>|<br\s*\/?\s*>/gi, "\n").replace(/<[^>]*>/g, "")).trim();
+  }
+  return { title: pr.title, description, state: String(pr.state || "unknown"), headSha: typeof pr.headSha === "string" ? pr.headSha : null };
+}
+
+async function fetchGitHubPublic(location: PRLocation, fetcher: Fetcher): Promise<PRRecord> {
+  const headers = { Accept: "text/html", "User-Agent": "Jev-PR-Classifier/1.0" };
+  const html = await sourceRequest(location.url, "GitHub 公开网页", headers, fetcher, false);
+  const meta = parseGitHubPublicPage(html, location);
+  const diffUrl = `https://patch-diff.githubusercontent.com/raw/${encodeURIComponent(location.owner)}/${encodeURIComponent(location.repo)}/pull/${location.number}.diff`;
+  const diff = await sourceRequest(diffUrl, "GitHub 公开 diff", { ...headers, Accept: "text/plain" }, fetcher, false);
+  const patches = parseUnifiedDiff(diff);
+  if (!patches.size) throw new AppError("SOURCE_FORMAT", "GitHub 未返回可用于分类的公开 diff。", 502);
+  const files = [...patches].slice(0,300).map(([path,patch]): PRFile => ({path,patch,status:/^new file mode /m.test(patch)?"added":/^deleted file mode /m.test(patch)?"removed":/^rename from /m.test(patch)?"renamed":"modified",additions:(patch.match(/^\+(?!\+\+)/gm)||[]).length,deletions:(patch.match(/^-(?!--)/gm)||[]).length}));
+  return {location,...meta,baseSha:null,files,changedFiles:(diff.match(/^diff --git /gm)||[]).length,additions:null,deletions:null,diffComplete:false,warnings:["GitHub API 读取受限，已改用公开 PR 网页与净 diff。描述来自网页渲染文本，部分 API 元数据未验证，请人工复核。"]};
+}
+
+async function fetchPRFromApi(location: PRLocation, config: RuntimeConfig, fetcher: Fetcher): Promise<PRRecord> {
   const { provider, owner, repo, number } = location;
   const label = { github: "GitHub", gitee: "Gitee", gitcode: "GitCode", atomgit: "AtomGit" }[provider];
   const base = provider === "github" ? "https://api.github.com" : provider === "gitee" ? "https://gitee.com/api/v5" : `https://api.${provider}.com/api/v5`;
