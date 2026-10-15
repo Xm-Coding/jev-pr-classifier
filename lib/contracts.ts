@@ -13,7 +13,7 @@ export interface AnalysisResult {
   model: string; rubricVersion: string; choice: string; confidence: number;
   probabilities: Record<string, number>; usage: { input_tokens?: number; output_tokens?: number };
   pr: Omit<PRRecord, "files" | "description" | "warnings" | "diffComplete"> & { files: Omit<PRFile, "patch">[] };
-  warnings: string[]; inputComplete: boolean; elapsedMs: number; fetchMs: number; inferenceMs: number;
+  warnings: string[]; inputComplete: boolean; contextMode: "standard" | "long"; requestBytes: number; elapsedMs: number; fetchMs: number; inferenceMs: number;
 }
 export class AppError extends Error {
   code: string; status: number;

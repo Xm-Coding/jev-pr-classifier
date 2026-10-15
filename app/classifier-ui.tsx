@@ -1,4 +1,5 @@
 "use client";
+import { DEFAULT_MODEL } from "../lib/model-policy.ts";
 import { useEffect, useRef, useState } from "react";
 import { ArrowUpRight, ArrowRight, GitPullRequest, Link2, LoaderCircle, AlertCircle, Check, ChevronDown, Copy, FileCode2, GitBranch, ShieldCheck, Sparkles, X, SlidersHorizontal } from "lucide-react";
 import { CATEGORIES } from "../lib/rubric.ts";
@@ -15,7 +16,7 @@ export default function ClassifierUI() {
   const [url, setUrl] = useState(""); const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null); const [error, setError] = useState("");
   const [elapsed, setElapsed] = useState(0); const [copied, setCopied] = useState(false);
-  const [threshold, setThreshold] = useState(0.85); const [model, setModel] = useState("jev-1.13.0");
+  const [threshold, setThreshold] = useState(0.85); const [model, setModel] = useState(DEFAULT_MODEL);
   const [service, setService] = useState<ServiceStatus | null>(null);
   const [connectionError, setConnectionError] = useState("");
   const [errorCode, setErrorCode] = useState(""); const [requestId, setRequestId] = useState("");
@@ -26,7 +27,7 @@ export default function ClassifierUI() {
   async function analyze(event: React.FormEvent) {
     event.preventDefault(); if (!url.trim() || busy) return;
     const id = ++serial.current; const abort = new AbortController(); controller.current = abort;
-    const timeout = setTimeout(() => abort.abort("timeout"), 150_000);
+    const timeout = setTimeout(() => abort.abort("timeout"), 210_000);
     setBusy(true); setElapsed(0); setError(""); setErrorCode(""); setRequestId(""); setResult(null);
     try {
       const data = await requestSite<AnalysisResult>("/api/classify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: url.trim() }), signal: abort.signal });
@@ -42,8 +43,8 @@ export default function ClassifierUI() {
     try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1800); } catch { setError("浏览器未允许复制，请直接选择页面中的结果。"); }
   }
   const ranked = result ? [...CATEGORIES].sort((a, b) => result.probabilities[b.id] - result.probabilities[a.id]) : [];
-  const meetsThreshold = result && result.inputComplete && result.confidence >= threshold;
-  const connectionLabel = result ? "分类调用成功" : connectionError ? "工作台连接失败" : !service ? "正在检查连接" : service.availability === "reachable" ? "API 可达" : "连接不可用";
+  const meetsThreshold = result && result.inputComplete && result.contextMode !== "long" && result.confidence >= threshold;
+  const connectionLabel = result ? "分类调用成功" : connectionError ? "工作台连接失败" : !service ? "正在检查连接" : service.availability === "reachable" ? "模型调用已验证" : "连接不可用";
   return (
     <div className="app-shell">
       <header className="topbar"><a href="/" className="brand" aria-label="PR 分类工作台首页"><span className="brand-mark"><GitPullRequest size={20} strokeWidth={2.2} /></span><span>PR Lens<span className="brand-divider">/</span><span className="brand-caption">分类工作台</span></span></a><div className="topbar-right"><span className="prototype-tag">PROTOTYPE</span><a href="https://docs.typesafe.ai/introduction" target="_blank" rel="noreferrer">TypeSafe 文档 <ArrowUpRight size={14} /></a></div></header>
@@ -64,10 +65,10 @@ export default function ClassifierUI() {
             {busy && <div className="panel loading-panel"><div className="loading-symbol"><LoaderCircle size={31} className="spin" /></div><h2>正在读取改动并请求 Jev</h2><p>较大的 PR 或平台响应较慢时，需要多等一会儿。</p><span className="elapsed-time">已等待 {elapsed.toFixed(1)} 秒</span><button className="text-button" onClick={cancel}>取消等待</button></div>}
             {result && <>
               <div className="panel outcome-panel"><div className="outcome-top"><span className="small-label">主要类别 · PRIMARY CATEGORY</span><button className="copy-button" onClick={copyResult}>{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? "已复制" : "复制结果"}</button></div><div className="outcome-main"><div><div className="chosen-label">{name(result.choice)}<span className="choice-check"><Check size={15} /></span></div><p>根据本次 PR 的主要改动目的归类</p></div><div className="top-probability"><strong>{percent(result.probabilities[result.choice])}</strong><span>该类别概率</span></div></div><div className="confidence-strip"><div><span className="confidence-label">Confidence <span className="help-dot" title="由类别概率分布计算的集中程度，不等于分类正确率。">?</span></span><strong>{percent(result.confidence)}</strong></div><span className={`review-status ${meetsThreshold ? "status-clear" : ""}`}>{meetsThreshold ? <Check size={13} /> : <AlertCircle size={13} />}{meetsThreshold ? "达到试验门限" : "建议人工复核"}</span></div></div>
-              {result.warnings.length > 0 && <div className="warning-panel"><AlertCircle size={17} /><div><strong>分类依据存在缺口</strong>{result.warnings.map(w => <p key={w}>{w}</p>)}</div></div>}
+              {result.warnings.length > 0 && <div className="warning-panel"><AlertCircle size={17} /><div><strong>分析提示</strong>{result.warnings.map(w => <p key={w}>{w}</p>)}</div></div>}
               <div className="panel distribution-panel"><div className="distribution-heading"><h2>七类概率分布</h2><span>Jev 原始返回</span></div><div className="probability-list">{ranked.map((c, index) => <div className={`probability-row ${c.id === result.choice ? "winner" : ""}`} key={c.id}><span className="rank-number">{String(index + 1).padStart(2, "0")}</span><span className="probability-name">{c.label}</span><div className="bar-track"><div className="bar-fill" style={{ width: `${result.probabilities[c.id] * 100}%` }} /></div><strong>{percent(result.probabilities[c.id])}</strong></div>)}</div><p className="probability-note">概率总和约为 100%。confidence 衡量分布集中程度，不代表分类正确率。</p></div>
-              <div className="panel source-panel"><div className="source-heading"><span className="source-platform">{result.pr.location.provider.toUpperCase()}</span><a href={result.pr.location.url} target="_blank" rel="noreferrer">打开 PR <ArrowUpRight size={13} /></a></div><h3>{result.pr.title}</h3><div className="source-details"><span><GitPullRequest size={14} />{result.pr.location.owner}/{result.pr.location.repo} #{result.pr.location.number}</span><span><FileCode2 size={14} />{result.pr.changedFiles} 个文件</span>{result.pr.additions !== null && <span className="additions">+{result.pr.additions}</span>}{result.pr.deletions !== null && <span className="deletions">−{result.pr.deletions}</span>}</div><details className="file-details"><summary>查看改动文件 <ChevronDown size={14} /></summary><ul>{result.pr.files.slice(0, 50).map((f, i) => <li key={`${f.path}-${i}`}><FileCode2 size={13} /><span>{f.path}</span><small>{f.status}</small></li>)}</ul>{result.pr.files.length > 50 && <p className="field-help">还有 {result.pr.files.length - 50} 个文件。</p>}</details><div className="result-meta"><span>{result.model}</span><span>读取 {seconds(result.fetchMs)}</span><span>推理 {seconds(result.inferenceMs)}</span>{typeof result.usage.input_tokens === "number" && <span>{result.usage.input_tokens.toLocaleString()} 输入 tokens</span>}</div></div>
-              <details className="panel threshold-panel"><summary><span><SlidersHorizontal size={15} />试验复核门限</span><ChevronDown size={15} /></summary><div className="threshold-content"><label htmlFor="threshold">Confidence 门限<strong>{Math.round(threshold * 100)}%</strong></label><input id="threshold" type="range" min="0.5" max="0.99" step="0.01" value={threshold} onChange={e => setThreshold(Number(e.target.value))} /><p>仅用于观察复核建议，不改变 API 结果。门限尚未用平台数据校准；输入不完整时始终建议复核。</p></div></details>
+              <div className="panel source-panel"><div className="source-heading"><span className="source-platform">{result.pr.location.provider.toUpperCase()}</span><a href={result.pr.location.url} target="_blank" rel="noreferrer">打开 PR <ArrowUpRight size={13} /></a></div><h3>{result.pr.title}</h3><div className="source-details"><span><GitPullRequest size={14} />{result.pr.location.owner}/{result.pr.location.repo} #{result.pr.location.number}</span><span><FileCode2 size={14} />{result.pr.changedFiles} 个文件</span>{result.pr.additions !== null && <span className="additions">+{result.pr.additions}</span>}{result.pr.deletions !== null && <span className="deletions">−{result.pr.deletions}</span>}</div><details className="file-details"><summary>查看改动文件 <ChevronDown size={14} /></summary><ul>{result.pr.files.slice(0, 50).map((f, i) => <li key={`${f.path}-${i}`}><FileCode2 size={13} /><span>{f.path}</span><small>{f.status}</small></li>)}</ul>{result.pr.files.length > 50 && <p className="field-help">还有 {result.pr.files.length - 50} 个文件。</p>}</details><div className="result-meta"><span>{result.model}</span><span>{result.contextMode === "long" ? "长上下文" : "标准上下文"}</span><span>读取 {seconds(result.fetchMs)}</span><span>推理 {seconds(result.inferenceMs)}</span>{typeof result.usage.input_tokens === "number" && <span>{result.usage.input_tokens.toLocaleString()} 输入 tokens</span>}</div></div>
+              <details className="panel threshold-panel"><summary><span><SlidersHorizontal size={15} />试验复核门限</span><ChevronDown size={15} /></summary><div className="threshold-content"><label htmlFor="threshold">Confidence 门限<strong>{Math.round(threshold * 100)}%</strong></label><input id="threshold" type="range" min="0.5" max="0.99" step="0.01" value={threshold} onChange={e => setThreshold(Number(e.target.value))} /><p>仅用于观察复核建议，不改变 API 结果。门限尚未用平台数据校准；输入不完整或使用长上下文时始终建议复核。</p></div></details>
             </>}
           </section>
         </div>

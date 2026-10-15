@@ -1,3 +1,4 @@
+import { DEFAULT_MODEL } from "../lib/model-policy.ts";
 // Read credentials once from hidden stdin. Nothing is written to disk or argv.
 import { fileURLToPath } from "node:url";
 const mode = process.argv[2] || "dev";
@@ -22,7 +23,7 @@ if (mode === "check") {
   console.log(JSON.stringify({ status: response.status, ok: response.ok }));
 } else if (mode === "live-test") {
   const { classifyPR } = await import("../lib/classifier.ts");
-  const config = { apiKey: process.env.TYPESAFE_API_KEY, model: process.env.TYPESAFE_MODEL || "jev-1.13.0" };
+  const config = { apiKey: process.env.TYPESAFE_API_KEY, model: process.env.TYPESAFE_MODEL || DEFAULT_MODEL };
   const urls = process.argv[3] ? [process.argv[3]] : ["https://gitee.com/dromara/sa-token/pulls/378", "https://gitcode.com/openeuler/docs/merge_requests/635", "https://github.com/psf/requests/pull/7628"];
   for (const url of urls) {
     try { const r = await classifyPR(url, config); console.log(JSON.stringify({ url, model: r.model, category: r.choice, confidence: r.confidence, probabilities: r.probabilities, files: r.pr.changedFiles, complete: r.inputComplete, warnings: r.warnings, tokens: r.usage.input_tokens, elapsedMs: r.elapsedMs })); }

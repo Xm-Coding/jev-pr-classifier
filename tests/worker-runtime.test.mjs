@@ -13,22 +13,25 @@ test("outbound request contract works in deployed workerd runtime without forwar
     export default {async fetch(){
       const fetcher=async (url,options)=>{
         new Request(url,options);
+        if(String(url).includes('typesafe.ai') && JSON.parse(options.body).questions.availability_check)return Response.json({model:JSON.parse(options.body).model,answers:{availability_check:{type:'noul',noul:1}}});
         if(String(url).includes('typesafe.ai'))return Response.json({model:'test',answers:{pr_category:{type:'choice',choice:'bugfix',confidence:1,probabilities:Object.fromEntries(CATEGORIES.map(c=>[c.id,c.id==='bugfix'?1:0]))}},usage:{}});
         return Response.json(String(url).includes('/files')?[{filename:'fix.go',patch:'+fix'}]:{title:'Fix',changed_files:1});
       };
       const answer=await callJev({}, {apiKey:'test-only-key'},fetcher);
+      const longAnswer=await callJev({text:'x '.repeat(40000)}, {apiKey:'test-only-key'},async(url,options)=>{
+        const request=new Request(url,options);if(request.headers.get('TypeSafe-Danger-Zone-Long-Context')!=='true')throw new Error('missing long-context header');return fetcher(url,options);});
       const health=await checkServiceStatus({apiKey:'test-only-key'},fetcher);
       const pr=await fetchPR(parsePRUrl('https://github.com/a/b/pull/1'),{},fetcher);
       let requests=0;let redirectError;
       try{await callJev({}, {apiKey:'test-only-key'},async(url,options)=>{
         new Request(url,options);requests++;return new Response(null,{status:302,headers:{Location:'https://example.test'}});
       });}catch(e){redirectError=e.code;}
-      return Response.json({choice:answer.choice,available:health.availability,complete:pr.diffComplete,requests,redirectError});
+      return Response.json({choice:answer.choice,longChoice:longAnswer.choice,available:health.availability,complete:pr.diffComplete,requests,redirectError});
     }};`;
   const compiled = await build({ stdin:{contents:entry,resolveDir:fileURLToPath(new URL("..",import.meta.url)),sourcefile:"worker-contract.ts"}, bundle:true,write:false,format:"esm",platform:"browser",target:"es2022" });
   const worker = new Miniflare({modules:true,compatibilityDate:"2026-05-15",compatibilityFlags:["nodejs_compat"],script:compiled.outputFiles[0].text});
   try {
     const data = await (await worker.dispatchFetch("http://worker.test/")).json();
-    assert.deepEqual(data,{choice:"bugfix",available:"reachable",complete:true,requests:1,redirectError:"JEV_API_ERROR"});
+    assert.deepEqual(data,{choice:"bugfix",longChoice:"bugfix",available:"reachable",complete:true,requests:1,redirectError:"JEV_API_ERROR"});
   } finally { await worker.dispose(); }
 });

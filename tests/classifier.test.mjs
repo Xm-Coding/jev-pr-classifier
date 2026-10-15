@@ -32,7 +32,7 @@ test("preserve code comments as evidence and enforce request byte budget", () =>
   pr.description = "详细说明".repeat(7000); pr.files[0].patch = "改动内容🧪".repeat(30000);
   const large = prepareState(pr, "jev-1.13.0");
   const bytes = new TextEncoder().encode(JSON.stringify({model: "jev-1.13.0", state: large.state, questions: {pr_category: CLASSIFICATION_QUESTION}})).length;
-  assert.ok(bytes <= 28000); assert.equal(large.inputComplete, false); assert.ok(large.warnings.length); assert.ok(!large.state.pr.files[0].diff.includes("�"));
+  assert.ok(bytes <= 224000); assert.equal(large.inputComplete, false); assert.ok(large.warnings.length); assert.ok(!large.state.pr.files[0].diff.includes("�"));
 });
 test("incomplete source evidence cannot become complete during preprocessing", () => { const pr = record(); pr.diffComplete = false; pr.warnings = ["missing diff"]; assert.equal(prepareState(pr, "jev-1.13.0").inputComplete, false); });
 test("validate seven probabilities without rescaling API confidence", () => {

@@ -9,7 +9,7 @@ Classifying code PR into certain types by JEV model
 
 2026-10-14 复核：Higress PR #5079 可以完整读取标题、描述及 6 个文件的 diff；本机 TypeSafe 请求仍返回 451。托管站点从本机 curl 访问被 Cloudflare 网关以 403 拒绝，无法由本机验证托管推理结果；这个网络路径与用户浏览器不是同一条，不能认定用户错误也是 403。查询到的生产 Worker 日志只显示页面和配置检查成功，尚无分类请求记录。
 
-网页现在分别处理浏览器连接失败、登录跳转、网关非 JSON 响应和模型错误，显示错误码和请求编号，不再直接展示 `Failed to fetch`。登录跳转使用正常顶层导航；服务访问权限不变。`/api/status` 会从服务器检查 TypeSafe 模型接口连通性，仅配置 Key 不会显示已连通。模型接口可达也不代表某次推理已成功。分类请求日志只记录状态、错误码、阶段和请求编号，不记录 Key 或 PR 内容。
+网页现在分别处理浏览器连接失败、登录跳转、网关非 JSON 响应和模型错误，显示错误码和请求编号，不再直接展示 `Failed to fetch`。登录跳转使用正常顶层导航；服务访问权限不变。`/api/status` 现在会从服务器对配置的模型发出一次很小的真实推理请求，校验响应结构和实际版本；同一 Worker isolate 内缓存 60 秒。它消耗少量输入 tokens，验证模型调用与账户权限，不代表具体 PR 分类已成功。分类请求日志只记录状态、错误码、阶段和请求编号，不记录 Key 或 PR 内容。
 
 排查发现托管代码使用 `redirect: "error"`，在本项目 Cloudflare Worker 运行时（2026-05-15 兼容日期）会直接抛出 `Invalid redirect value`，请求尚未发出。已把源平台与 TypeSafe 请求改为 `manual`；3xx 作为错误处理，禁止自动转发服务端凭据。增加真实 workerd 运行时契约验证，避免仅在 Node.js 中测试导致遗漏。
 
@@ -21,7 +21,7 @@ Classifying code PR into certain types by JEV model
 npm install
 read -s 'TYPESAFE_API_KEY?Jev API key: '
 export TYPESAFE_API_KEY
-export TYPESAFE_MODEL=jev-1.13.0
+export TYPESAFE_MODEL=jev-1.14.0
 npm run dev
 ```
 
@@ -48,11 +48,11 @@ npm run build
 
 处理 PR 时移除无效控制字符和描述中的 HTML 注释，保留代码注释、文档和字符串作为分类证据；通过固定问题把 PR 数据与分类规则分开。清洗与提示规则只能降低输入干扰，不能保证免疫提示注入。不会执行 PR 中的代码。标题、描述、路径和 diff 经 JSON 序列化放入 `state`，分类问题和七类定义放入 `questions.pr_category.instructions` 与 `criteria`。
 
-请求使用 `POST https://api.typesafe.ai/v1/systemone`，服务端 Bearer 鉴权，当前固定模型 `jev-1.13.0`。页面直接采用 `choice`、`probabilities` 和 `confidence`，不会自行补造、重归一化或根据文字生成概率。[官方 API](https://docs.typesafe.ai/api)、[模型与限制](https://docs.typesafe.ai/models)、[介绍](https://docs.typesafe.ai/introduction)。
+请求使用 `POST https://api.typesafe.ai/v1/systemone`，服务端 Bearer 鉴权，当前固定模型 `jev-1.14.0`。页面直接采用 `choice`、`probabilities` 和 `confidence`，不会自行补造、重归一化或根据文字生成概率。[官方 API](https://docs.typesafe.ai/api)、[模型与限制](https://docs.typesafe.ai/models)、[介绍](https://docs.typesafe.ai/introduction)。
 
 Choice confidence 的官方公式是 `(p_max - 1/n) / (1 - 1/n)`。这里固定七类，最高类别概率 87% 对应 confidence 约 84.83%；confidence 87% 对应最高概率约 88.86%。它描述概率分布集中程度，不能直接解释为业务判断正确率。[官方置信度说明](https://docs.typesafe.ai/confidence)。
 
-页面中的 85% 门限只是可调整的试验值，不改变原始 API 数据，也不会自动审核 PR。输入不完整时始终显示复核建议。正式使用应把现有数据划分为规则开发、门限选择和最终测试三部分，保证同一 PR 的不同快照及近重复记录不跨集合；人工核验已有标签，按类别统计准确率、自动分类覆盖率和被接受样本的错误率，再分别选择模型版本与类别门限。API 故障应重试或保留失败状态，不能伪装成低 confidence 分类。
+页面中的 85% 门限只是可调整的试验值，不改变原始 API 数据，也不会自动审核 PR。输入不完整或使用长上下文时始终显示复核建议。正式使用应把现有数据划分为规则开发、门限选择和最终测试三部分，保证同一 PR 的不同快照及近重复记录不跨集合；人工核验已有标签，按类别统计准确率、自动分类覆盖率和被接受样本的错误率，再分别选择模型版本与类别门限。API 故障应重试或保留失败状态，不能伪装成低 confidence 分类。
 
 关键文件：
 
@@ -63,3 +63,7 @@ Choice confidence 的官方公式是 `(p_max - 1/n) / (1 - 1/n)`。这里固定�
 - `tests/classifier.test.mjs`：跨平台格式、分页、输入预算、凭据隔离、响应契约及地区错误测试。
 
 输入预算采用保守的 UTF-8 字节上限，不依赖未经验证的 token 估算。大 PR 的 diff 会按预算截取，原始 API confidence 不会因此被人为降低，页面另外标出输入不完整。正式平台接入可把已存储的完整 PR 数据接入 `prepareState` 与 `callJev`，无需重复爬取链接。
+
+2026-10-15 模型升级：固定使用 `jev-1.14.0`。官方文档列出的最新版于 10 月 14 日发布，`jev-preview` 指向 1.14，`jev-latest` 仍指向 1.13；固定编号避免别名变化影响评测。两版默认均为每请求 64k tokens、每问题 32k tokens；发送 `TypeSafe-Danger-Zone-Long-Context: true` 后两项均为 262k tokens。长上下文按相同 token 单价计费，但官方提示会更慢且准确率下降。
+
+应用采用自动模式：完整 JSON 请求在 28,000 UTF-8 字节以内不加长上下文请求头；超过后启用长上下文，应用保守上限为 224,000 字节。这些是应用的字节预算，不是模型 token 上限，也不意味着已验证 262k tokens 的完整容量。预算内完整保留已读取的标题、描述和 diff，取消原先每文件 6 KB 的额外截取；超过应用预算仍暂按文件分配并截取，明确警告并要求复核。语义证据筛选与恶意注释隔离尚未实现，读取端 300 文件等限制仍存在。

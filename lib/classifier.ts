@@ -2,9 +2,9 @@ import { AppError } from "./contracts.ts";
 import type { AnalysisResult, Fetcher, PRRecord, RuntimeConfig } from "./contracts.ts";
 import { CATEGORIES, CLASSIFICATION_QUESTION, RUBRIC_VERSION } from "./rubric.ts";
 import { fetchPR, parsePRUrl } from "./pr-source.ts";
+import { DEFAULT_MODEL, STANDARD_REQUEST_BYTES, LONG_REQUEST_BYTES, LONG_CONTEXT_HEADER, contextModeFor, supportsLongContext } from "./model-policy.ts";
 
 const encoder = new TextEncoder();
-const MAX_REQUEST_BYTES = 28_000; // Conservative byte budget below Jev's 32K state+question token limit.
 const byteLength = (s: string) => encoder.encode(s).length;
 export function sliceUtf8(text: string, budget: number): string {
   const bytes = encoder.encode(text); if (bytes.length <= budget) return text;
@@ -19,34 +19,42 @@ export function prepareState(pr: PRRecord, model: string) {
   const warnings = [...pr.warnings];
   const description = cleanText(pr.description).replace(/<!--[\s\S]*?-->/g, "");
   const state = {
-    pr: { title: sliceUtf8(cleanText(pr.title), 1000), description: sliceUtf8(description, 5000),
-      files: pr.files.map(f => ({ path: sliceUtf8(cleanText(f.path), 350), status: f.status, additions: f.additions, deletions: f.deletions, diff: "" })),
+    pr: { title: cleanText(pr.title), description,
+      files: pr.files.map(f => ({ path: cleanText(f.path), status: f.status, additions: f.additions, deletions: f.deletions, diff: cleanText(f.patch) })),
     },
     input_quality: { total_changed_files: pr.changedFiles, provided_files: pr.files.length, diff_complete: pr.diffComplete, truncated: false },
   };
   const size = () => byteLength(JSON.stringify({ model, state, questions: { pr_category: CLASSIFICATION_QUESTION } }));
-  if (description !== state.pr.description || pr.title !== state.pr.title) state.input_quality.truncated = true;
-  while (size() > MAX_REQUEST_BYTES - 1000 && state.pr.files.length) { state.pr.files.pop(); state.input_quality.truncated = true; }
-  const available = Math.max(0, MAX_REQUEST_BYTES - size() - 500);
-  const share = Math.min(6000, Math.floor(available / Math.max(1, state.pr.files.length)));
-  let truncatedFiles = 0;
-  for (let i = 0; i < state.pr.files.length; i++) {
-    const original = cleanText(pr.files[i].patch);
-    const chosen = sliceUtf8(original, share);
-    state.pr.files[i].diff = chosen;
-    if (chosen !== original) truncatedFiles++;
+  const maxRequestBytes = supportsLongContext(model) ? LONG_REQUEST_BYTES : STANDARD_REQUEST_BYTES;
+  // Preserve all available evidence if it fits. There is no longer a per-file 6KB cap.
+  if (size() > maxRequestBytes) {
+    state.pr.title = sliceUtf8(state.pr.title, 1000);
+    state.pr.description = sliceUtf8(description, supportsLongContext(model) ? 20_000 : 5000);
+    state.input_quality.truncated = true;
+    state.input_quality.diff_complete = false;
+    for (const f of state.pr.files) { f.path = sliceUtf8(f.path, 350); f.diff = ""; }
+    while (size() > maxRequestBytes - 1000 && state.pr.files.length) state.pr.files.pop();
+    state.input_quality.provided_files = state.pr.files.length;
+    const available = Math.max(0, maxRequestBytes - size() - 500);
+    const share = Math.floor(available / Math.max(1, state.pr.files.length));
+    let truncatedFiles = 0;
+    for (let i = 0; i < state.pr.files.length; i++) {
+      const original = cleanText(pr.files[i].patch);
+      state.pr.files[i].diff = sliceUtf8(original, share);
+      if (state.pr.files[i].diff !== original) truncatedFiles++;
+    }
+    while (size() > maxRequestBytes) {
+      const longest = state.pr.files.reduce((best, f) => f.diff.length > best.diff.length ? f : best, { diff: "" });
+      if (!longest.diff) throw new AppError("INPUT_TOO_LARGE", "PR 的文件清单超过输入预算，请在平台中先整理该 PR。", 413);
+      longest.diff = sliceUtf8(longest.diff, Math.floor(byteLength(longest.diff) * 0.8));
+    }
+    warnings.push(`PR 超出保守输入预算，部分内容已截取${truncatedFiles ? `（${truncatedFiles} 个文件的 diff）` : ""}；核心证据提取尚未实现，请人工复核。`);
+    if (state.pr.files.length < pr.files.length) warnings.push("部分文件路径未放入模型输入。");
   }
-  if (truncatedFiles) { state.input_quality.truncated = true; warnings.push(`${truncatedFiles} 个文件的 diff 已按输入预算截取。`); }
-  while (size() > MAX_REQUEST_BYTES) {
-    const longest = state.pr.files.reduce((best, f) => f.diff.length > best.diff.length ? f : best, { diff: "" });
-    if (!longest.diff) throw new AppError("INPUT_TOO_LARGE", "PR 的文件清单超过输入预算，请在平台中先整理该 PR。", 413);
-    longest.diff = sliceUtf8(longest.diff, Math.floor(byteLength(longest.diff) * 0.8)); state.input_quality.truncated = true;
-  }
-  state.input_quality.provided_files = state.pr.files.length;
-  if (state.pr.files.length < pr.files.length) warnings.push("部分文件路径未放入模型输入。");
-  if (state.input_quality.truncated && !warnings.some(w => w.includes("输入预算"))) warnings.push("标题或描述已按输入预算截取。");
-  state.input_quality.diff_complete = pr.diffComplete && !state.input_quality.truncated;
-  return { state, warnings, inputComplete: state.input_quality.diff_complete };
+  const requestBytes = size();
+  const contextMode = contextModeFor(model, requestBytes);
+  if (contextMode === "long") warnings.push("已启用长上下文模式。TypeSafe 提示此模式可能更慢且准确率下降；门限尚未针对长 PR 校准，建议人工复核。");
+  return { state, warnings, inputComplete: state.input_quality.diff_complete, contextMode, requestBytes };
 }
 
 export function validateJevResponse(data: any) {
@@ -69,15 +77,20 @@ export function validateJevResponse(data: any) {
 
 export async function callJev(state: unknown, config: RuntimeConfig, fetcher: Fetcher = fetch) {
   if (!config.apiKey) throw new AppError("KEY_NOT_CONFIGURED", "服务端尚未配置 Jev API key。", 503);
-  const model = config.model || "jev-1.13.0";
+  const model = config.model || DEFAULT_MODEL;
+  const body = JSON.stringify({ model, state, questions: { pr_category: CLASSIFICATION_QUESTION } });
+  const contextMode = contextModeFor(model, byteLength(body));
+  if (byteLength(body) > (contextMode === "long" ? LONG_REQUEST_BYTES : STANDARD_REQUEST_BYTES)) throw new AppError("INPUT_TOO_LARGE", "分类请求超出当前输入预算，请先整理 PR 证据。", 413);
+  const headers: Record<string, string> = { "Content-Type": "application/json", Authorization: `Bearer ${config.apiKey}` };
+  if (contextMode === "long") headers[LONG_CONTEXT_HEADER] = "true";
+  const signal = AbortSignal.timeout(contextMode === "long" ? 90_000 : 45_000);
   let response: Response | undefined;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       response = await fetcher("https://api.typesafe.ai/v1/systemone", {
-        method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.apiKey}` },
-        body: JSON.stringify({ model, state, questions: { pr_category: CLASSIFICATION_QUESTION } }),
+        method: "POST", headers, body,
         // Workers supports manual/follow in our runtime; never forward the key on redirects.
-        redirect: "manual", signal: AbortSignal.timeout(45_000),
+        redirect: "manual", signal,
       });
     } catch { throw new AppError("JEV_CONNECTION", "Jev 请求超时或连接失败，请稍后重试。", 502); }
     if (![429, 529].includes(response.status) || attempt === 2) break;
@@ -103,12 +116,12 @@ export async function classifyPR(url: unknown, config: RuntimeConfig, fetcher: F
   const location = parsePRUrl(url);
   if (!config.apiKey) throw new AppError("KEY_NOT_CONFIGURED", "服务端尚未配置 Jev API key。", 503);
   const start = Date.now(); const pr = await fetchPR(location, config, fetcher); const fetched = Date.now();
-  const prepared = prepareState(pr, config.model || "jev-1.13.0");
+  const prepared = prepareState(pr, config.model || DEFAULT_MODEL);
   const answer = await callJev(prepared.state, config, fetcher);
   const { files, description: _description, warnings: _warnings, diffComplete: _complete, ...metadata } = pr;
   return { ...answer, rubricVersion: RUBRIC_VERSION,
     pr: { ...metadata, files: files.map(({ patch: _patch, ...file }) => file) },
-    warnings: prepared.warnings, inputComplete: prepared.inputComplete,
+    warnings: prepared.warnings, inputComplete: prepared.inputComplete, contextMode: prepared.contextMode, requestBytes: prepared.requestBytes,
     elapsedMs: Date.now() - start, fetchMs: fetched - start, inferenceMs: Date.now() - fetched,
   };
 }
