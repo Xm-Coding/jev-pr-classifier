@@ -1,3 +1,6 @@
+# jev-pr-classifier
+Classifying code PR into certain types by JEV model
+
 这是一个 PR 单分类原型：输入 GitHub、Gitee、GitCode 或 AtomGit 的公开 PR 链接，服务端读取标题、描述和改动文件，调用 TypeSafe Jev 官方 API；网页显示一个主要类别、七类概率及 API 返回的 confidence。
 
 固定类别为：修复缺陷、增加特性、示例/教程、功能测试、代码重构、运行环境、代码增强。首版定义和边界在 `lib/rubric.ts`；这是待用平台样本验证的初始口径。混合 PR 按主要目的归类，功能或修复附带的文档/测试不单独改变主类别。
