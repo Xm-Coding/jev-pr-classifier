@@ -1,7 +1,13 @@
 # jev-pr-classifier
 Classifying code PR into certain types by JEV model
 
-这是一个 PR 单分类原型：输入 GitHub、Gitee、GitCode 或 AtomGit 的公开 PR 链接，服务端读取标题、描述和改动文件，调用 TypeSafe Jev 官方 API；网页显示一个主要类别、七类概率及 API 返回的 confidence。
+这是一个贡献单分类原型：输入 GitHub、Gitee、GitCode 或 AtomGit 的公开 PR 或 Commit 链接，服务端读取贡献说明和改动文件，调用 TypeSafe Jev 官方 API；网页显示一个主要类别、七类概率及 API 返回的 confidence。
+
+Commit 输入使用 `/commit/{sha}`，SHA 支持 7–40 位十六进制并由源 API 解析、核验为完整 SHA。单次提交只分类它的净改动，不查找或扩展为关联 PR。合并提交以第一父提交为比较基准；初始提交与空树比较。结果、复制内容和批量 CSV 均区分 PR/Commit，并保留完整 SHA。历史数据中多余的连续斜杠会在链接解析时规范化。
+
+2026-10-16 已用历史文件中三个平台的实际 commit 验证来源读取：RocketMQ Dashboard 的示例提交读到 3 个文件，Gitee 示例 2 个，GitCode 示例 3 个。GitCode 元数据请求须加 `show_diff=true`，文件正文从专用 `/repos/{owner}/{repo}/commit/{sha}/diff` 读取；仅改变 URL 正则不足以获得分类证据。GitHub Commit 支持分页，原型仍最多保留 300 个文件；平台截断、缺失 diff 和匿名公开 patch 降级均要求复核。
+
+批量功能同时接受 PR 与 Commit，仍限每批 50 条、并发 2 条；10,652 条历史贡献需分批提交。它没有后台持久队列或一键整表跑完能力。API 仍使用 `/api/classify` 和兼容的响应字段 `pr`，以 `pr.location.kind` 区分对象；Jev 输入中的 `pr.source_type="commit"`、`pr.comparison`、`pr.parent_count` 说明提交范围。用户的七类 v2 定义保持不变，仅对 commit 请求附加范围指令。
 
 固定类别为：修复缺陷、增加特性、示例/教程、功能测试、代码重构、运行环境、代码增强。当前定义和边界为用户提供的 `pr-seven-types-v2`，位于 `lib/rubric.ts`。混合 PR 按主要目的归类，功能或修复附带的文档/测试不单独改变主类别。
 

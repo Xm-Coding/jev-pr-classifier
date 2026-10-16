@@ -2,6 +2,8 @@
 
 核对日期：2026-10-16。本文描述当前代码的行为，而不是待实现的清洗方案。分类规则为用户提供的 `pr-seven-types-v2`，模型默认固定为 `jev-1.14.0`，两种版本相互独立。
 
+当前也支持单次 Commit；下文原有 PR 用例和字段名继续兼容。Commit 的输入/输出差异及平台接口见第 9 节。
+
 ## 1. 数据流
 
 ```mermaid
@@ -284,3 +286,25 @@ TypeSafe 成功响应的**结构示例**如下；这里的分布、token 数用�
 | `upstreamStatus` | 可选，实际收到 TypeSafe HTTP 响应后包含状态码。 |
 
 状态 API 使用 `Cache-Control: no-store`，成功或失败的可用性判断都通过这个对象表达；不能只检查浏览器收到的 HTTP 200 就认为模型可用。
+
+## 9. Commit 贡献地址
+
+浏览器仍提交 `POST /api/classify`，body 为 `{ "url": "https://github.com/apache/rocketmq-dashboard/commit/baf70ae6a759570110dce9a1973dc617433492dc" }`。PR 和 Commit 可以混合排队。
+
+| 平台 | 提交元数据 / 文件 | 补充 diff |
+| --- | --- | --- |
+| GitHub | `GET /repos/{owner}/{repo}/commits/{sha}?per_page=100&page=1`，从响应的 files 读取并分页 | 同一提交 API，Accept 为 application/vnd.github.diff |
+| Gitee | `GET /api/v5/repos/{owner}/{repo}/commits/{sha}`，files 含文件及 patch | 公开 `/commit/{sha}.diff`，若失败则明确标注证据缺失 |
+| GitCode / AtomGit | `GET /api/v5/repos/{owner}/{repo}/commits/{sha}?show_diff=true` | `GET /api/v5/repos/{owner}/{repo}/commit/{sha}/diff`，注意单数 commit |
+
+元数据响应中的完整 `sha` 必须匹配输入 SHA 前缀；后续分页和 diff 请求固定使用解析出的完整 SHA。不会把用户输入当成分支名，也不会读取关联 PR 来替换提交范围。源 token 仍仅发给所属平台 API。
+
+提交说明首行映射到 `pr.title`，完整说明映射到 `pr.description`，`parents[0].sha` 为 `baseSha`，提交 sha 为 `headSha`，`stats.additions/deletions` 为顶层统计。合并提交以第一父提交比较，初始提交 baseSha=null、与空树比较。
+
+Jev 的 `state.pr` 额外包含 `source_type="commit"`、`comparison`（first-parent / empty-tree / unknown）、`parent_count`（可能为 null）。问题仍名为 pr_category、类型 choice、七类 criteria 仍为用户提供的 v2；仅在完整 v2 指令前附加单次提交范围说明。输入预算包含这段附加指令。
+
+响应保留原有 `pr` 字段以兼容调用方：`pr.location.kind="commit"`，包含 `sha`，不伪造 number。PR 对象为 kind=pr 且包含 number。Commit 还返回 parentShas 和 comparison。来源 API 受限时可降级为 GitHub 公开 .patch，核验 patch 内 SHA，并将基准标 unknown、inputComplete=false，强制建议复核。
+
+批量 CSV 首列为“贡献链接”，增加“对象类型”“提交SHA或PR编号”“比较基准”字段。两种输入都沿用每批 50 条和并发 2 条限制。不要把一个 commit 的类别直接当作其关联完整 PR 的类别。
+
+示例 RocketMQ Dashboard 提交已实读到 3 个改动文件，说明标题为“fix(metrics): retain newest queries when history responses finish out of order (#6377)”。即使说明提到 #6377，分类输入也只包括该 SHA 的内容。此源数据读取验证不等于已经取得模型推理结果。

@@ -1,5 +1,5 @@
 import type { AnalysisResult } from "./contracts.ts";
-import { parsePRUrl } from "./pr-source.ts";
+import { parseContributionUrl } from "./pr-source.ts";
 import { requestSite, SiteRequestError } from "./client-api.ts";
 import { CATEGORIES } from "./rubric.ts";
 
@@ -19,11 +19,11 @@ export function parseBatchInput(input: string) {
   input.split(/\r?\n/).forEach((line, index) => {
     if (!line.trim()) return;
     try {
-      const location = parsePRUrl(line.trim());
+      const location = parseContributionUrl(line.trim());
       const id = location.provider === "github" ? location.url.toLowerCase() : location.url;
       if (seen.has(id)) { duplicateCount++; return; }
       seen.add(id); tasks.push({ id, url: location.url });
-    } catch (e) { issues.push({ line: index + 1, message: e instanceof Error ? e.message : "无法识别的 PR 链接。" }); }
+    } catch (e) { issues.push({ line: index + 1, message: e instanceof Error ? e.message : "无法识别的贡献链接。" }); }
   });
   return { tasks, issues, duplicateCount, overLimit: tasks.length > MAX_BATCH_SIZE };
 }
@@ -43,7 +43,7 @@ export async function classifyBatchItem(task: BatchTask, signal: AbortSignal): P
   try {
     return await requestSite<AnalysisResult>("/api/classify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: task.url }), signal: abort.signal });
   } catch (e) {
-    if (timedOut) throw new SiteRequestError("PR_TIMEOUT", "等待此 PR 的结果超时，服务端可能仍在处理。重试可能再次调用模型。");
+    if (timedOut) throw new SiteRequestError("PR_TIMEOUT", "等待此贡献的结果超时，服务端可能仍在处理。重试可能再次调用模型。");
     throw e;
   } finally { clearTimeout(timer); signal.removeEventListener("abort", cancel); }
 }
@@ -54,8 +54,8 @@ export async function runBatch(tasks: BatchTask[], options: {
   worker?: typeof classifyBatchItem;
   concurrency?: number;
 }) {
-  if (tasks.length > MAX_BATCH_SIZE) throw new Error(`每批最多 ${MAX_BATCH_SIZE} 个 PR。`);
-  if (new Set(tasks.map(t => t.id)).size !== tasks.length) throw new Error("批次内存在重复 PR。");
+  if (tasks.length > MAX_BATCH_SIZE) throw new Error(`每批最多 ${MAX_BATCH_SIZE} 个贡献链接。`);
+  if (new Set(tasks.map(t => t.id)).size !== tasks.length) throw new Error("批次内存在重复贡献链接。");
   // Retried entries may carry a previous error/result. Only identities enter a new run.
   tasks = tasks.map(({ id, url }) => ({ id, url }));
   const concurrency = Math.max(1, Math.min(BATCH_CONCURRENCY, Math.floor(options.concurrency ?? BATCH_CONCURRENCY) || 1));
@@ -88,10 +88,12 @@ function csvCell(value: unknown) {
 }
 export function batchToCsv(entries: BatchEntry[], threshold: number) {
   const statusName: Record<BatchStatus, string> = { queued: "待处理", running: "处理中", success: "成功", error: "失败", cancelled: "已停止等待" };
-  const headers = ["PR链接", "状态", "标题", "主要类别", "Confidence(0–1)", ...CATEGORIES.map(c => `${c.label}概率(0–1)`), "复核建议", "复核门限(0–1)", "模型", "上下文模式", "错误码", "错误说明", "请求编号", "分析提示"];
+  const headers = ["贡献链接", "状态", "标题", "主要类别", "Confidence(0–1)", ...CATEGORIES.map(c => `${c.label}概率(0–1)`), "复核建议", "复核门限(0–1)", "模型", "上下文模式", "错误码", "错误说明", "请求编号", "分析提示", "对象类型", "提交SHA或PR编号", "比较基准"];
   const rows = entries.map(entry => {
     const r = entry.result;
-    return [entry.url, statusName[entry.status], r?.pr.title, r ? CATEGORIES.find(c => c.id === r.choice)?.label : undefined, r?.confidence, ...CATEGORIES.map(c => r?.probabilities[c.id]), r ? reviewAdvice(r, threshold) : undefined, threshold, r?.model, r?.contextMode, entry.error?.code, entry.error?.message, entry.error?.requestId, r?.warnings.join("；")];
+    let location = r?.pr.location;
+    if (!location) { try { location = parseContributionUrl(entry.url); } catch { /* retain legacy entries without an identity */ } }
+    return [entry.url, statusName[entry.status], r?.pr.title, r ? CATEGORIES.find(c => c.id === r.choice)?.label : undefined, r?.confidence, ...CATEGORIES.map(c => r?.probabilities[c.id]), r ? reviewAdvice(r, threshold) : undefined, threshold, r?.model, r?.contextMode, entry.error?.code, entry.error?.message, entry.error?.requestId, r?.warnings.join("；"), location?.kind === "commit" ? "Commit" : location ? "PR" : undefined, location?.kind === "commit" ? location.sha : location?.number, r?.pr.comparison];
   });
   return "\uFEFF" + [headers, ...rows].map(row => row.map(csvCell).join(",")).join("\r\n");
 }

@@ -1,7 +1,7 @@
 import { AppError } from "./contracts.ts";
 import type { AnalysisResult, Fetcher, PRRecord, RuntimeConfig } from "./contracts.ts";
-import { CATEGORIES, CLASSIFICATION_QUESTION, RUBRIC_VERSION } from "./rubric.ts";
-import { fetchPR, parsePRUrl } from "./pr-source.ts";
+import { CATEGORIES, classificationQuestionFor, RUBRIC_VERSION } from "./rubric.ts";
+import { fetchContribution, parseContributionUrl } from "./pr-source.ts";
 import { DEFAULT_MODEL, STANDARD_REQUEST_BYTES, LONG_REQUEST_BYTES, LONG_CONTEXT_HEADER, contextModeFor, supportsLongContext } from "./model-policy.ts";
 
 const encoder = new TextEncoder();
@@ -20,11 +20,13 @@ export function prepareState(pr: PRRecord, model: string) {
   const description = cleanText(pr.description).replace(/<!--[\s\S]*?-->/g, "");
   const state = {
     pr: { title: cleanText(pr.title), description,
+      ...(pr.location.kind === "commit" ? { source_type: "commit", comparison: pr.comparison ?? "unknown", parent_count: pr.parentShas?.length ?? null } : {}),
       files: pr.files.map(f => ({ path: cleanText(f.path), status: f.status, additions: f.additions, deletions: f.deletions, diff: cleanText(f.patch) })),
     },
     input_quality: { total_changed_files: pr.changedFiles, provided_files: pr.files.length, diff_complete: pr.diffComplete, truncated: false },
   };
-  const size = () => byteLength(JSON.stringify({ model, state, questions: { pr_category: CLASSIFICATION_QUESTION } }));
+  const question = classificationQuestionFor(pr.location.kind === "commit" ? "commit" : "pr");
+  const size = () => byteLength(JSON.stringify({ model, state, questions: { pr_category: question } }));
   const maxRequestBytes = supportsLongContext(model) ? LONG_REQUEST_BYTES : STANDARD_REQUEST_BYTES;
   // Preserve all available evidence if it fits. There is no longer a per-file 6KB cap.
   if (size() > maxRequestBytes) {
@@ -45,10 +47,10 @@ export function prepareState(pr: PRRecord, model: string) {
     }
     while (size() > maxRequestBytes) {
       const longest = state.pr.files.reduce((best, f) => f.diff.length > best.diff.length ? f : best, { diff: "" });
-      if (!longest.diff) throw new AppError("INPUT_TOO_LARGE", "PR 的文件清单超过输入预算，请在平台中先整理该 PR。", 413);
+      if (!longest.diff) throw new AppError("INPUT_TOO_LARGE", "贡献的文件清单超过输入预算，请在平台中先整理改动证据。", 413);
       longest.diff = sliceUtf8(longest.diff, Math.floor(byteLength(longest.diff) * 0.8));
     }
-    warnings.push(`PR 超出保守输入预算，部分内容已截取${truncatedFiles ? `（${truncatedFiles} 个文件的 diff）` : ""}；核心证据提取尚未实现，请人工复核。`);
+    warnings.push(`贡献超出保守输入预算，部分内容已截取${truncatedFiles ? `（${truncatedFiles} 个文件的 diff）` : ""}；核心证据提取尚未实现，请人工复核。`);
     if (state.pr.files.length < pr.files.length) warnings.push("部分文件路径未放入模型输入。");
   }
   const requestBytes = size();
@@ -78,9 +80,10 @@ export function validateJevResponse(data: any) {
 export async function callJev(state: unknown, config: RuntimeConfig, fetcher: Fetcher = fetch) {
   if (!config.apiKey) throw new AppError("KEY_NOT_CONFIGURED", "服务端尚未配置 Jev API key。", 503);
   const model = config.model || DEFAULT_MODEL;
-  const body = JSON.stringify({ model, state, questions: { pr_category: CLASSIFICATION_QUESTION } });
+  const kind = (state as { pr?: { source_type?: string } } | null)?.pr?.source_type === "commit" ? "commit" : "pr";
+  const body = JSON.stringify({ model, state, questions: { pr_category: classificationQuestionFor(kind) } });
   const contextMode = contextModeFor(model, byteLength(body));
-  if (byteLength(body) > (contextMode === "long" ? LONG_REQUEST_BYTES : STANDARD_REQUEST_BYTES)) throw new AppError("INPUT_TOO_LARGE", "分类请求超出当前输入预算，请先整理 PR 证据。", 413);
+  if (byteLength(body) > (contextMode === "long" ? LONG_REQUEST_BYTES : STANDARD_REQUEST_BYTES)) throw new AppError("INPUT_TOO_LARGE", "分类请求超出当前输入预算，请先整理改动证据。", 413);
   const headers: Record<string, string> = { "Content-Type": "application/json", Authorization: `Bearer ${config.apiKey}` };
   if (contextMode === "long") headers[LONG_CONTEXT_HEADER] = "true";
   const signal = AbortSignal.timeout(contextMode === "long" ? 90_000 : 45_000);
@@ -113,9 +116,9 @@ export async function callJev(state: unknown, config: RuntimeConfig, fetcher: Fe
 }
 
 export async function classifyPR(url: unknown, config: RuntimeConfig, fetcher: Fetcher = fetch): Promise<AnalysisResult> {
-  const location = parsePRUrl(url);
+  const location = parseContributionUrl(url);
   if (!config.apiKey) throw new AppError("KEY_NOT_CONFIGURED", "服务端尚未配置 Jev API key。", 503);
-  const start = Date.now(); const pr = await fetchPR(location, config, fetcher); const fetched = Date.now();
+  const start = Date.now(); const pr = await fetchContribution(location, config, fetcher); const fetched = Date.now();
   const prepared = prepareState(pr, config.model || DEFAULT_MODEL);
   const answer = await callJev(prepared.state, config, fetcher);
   const { files, description: _description, warnings: _warnings, diffComplete: _complete, ...metadata } = pr;

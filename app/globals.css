@@ -116,3 +116,7 @@
 .batch-review,.batch-detail-button{font-size:10px}
 .batch-detail-grid>div{font-size:11px;color:#8a659a}
 .batch-row-error{color:#a96378}.batch-row-error span{font-size:9px;color:#aa7a8b}
+/* A commit's scope and immutable identity stay visible beside its result. */
+.commit-scope { font-size: 12px; line-height: 1.8; color: var(--muted-foreground, #667085); overflow-wrap: anywhere; margin: 12px 0; }
+.batch-object-kind { display: inline-block; font-size: 11px; color: #667085; margin: 8px 0 0; }
+.examples-row { flex-wrap: wrap; row-gap: 8px; }

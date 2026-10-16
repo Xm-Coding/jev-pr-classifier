@@ -1,10 +1,14 @@
 export type Fetcher = typeof fetch;
 export type Provider = "github" | "gitee" | "gitcode" | "atomgit";
-export interface PRLocation { provider: Provider; owner: string; repo: string; number: number; url: string }
+interface RepositoryLocation { provider: Provider; owner: string; repo: string; url: string }
+export interface PRLocation extends RepositoryLocation { kind: "pr"; number: number }
+export interface CommitLocation extends RepositoryLocation { kind: "commit"; sha: string }
+export type ContributionLocation = PRLocation | CommitLocation;
 export interface PRFile { path: string; status: string; additions: number | null; deletions: number | null; patch: string }
 export interface PRRecord {
-  location: PRLocation; title: string; description: string; state: string;
+  location: ContributionLocation; title: string; description: string; state: string;
   headSha: string | null; baseSha: string | null; files: PRFile[];
+  parentShas?: string[]; comparison?: "first-parent" | "empty-tree" | "unknown";
   changedFiles: number; additions: number | null; deletions: number | null;
   warnings: string[]; diffComplete: boolean;
 }
