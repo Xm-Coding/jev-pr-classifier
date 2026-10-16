@@ -1,0 +1,22 @@
+[
+  {
+    "sha": "a5fd7ff1ea66f6fc749282e4589e3ea6d85e2458",
+    "filename": "warm-flow-ui/src/components/design/common/vue/nodeExtList.vue",
+    "status": null,
+    "additions": "1",
+    "deletions": "1",
+    "blob_url": "https://gitee.com/dromara/warm-flow/blob/a5fd7ff1ea66f6fc749282e4589e3ea6d85e2458/warm-flow-ui/src/components/design/common/vue/nodeExtList.vue",
+    "raw_url": "https://gitee.com/dromara/warm-flow/raw/a5fd7ff1ea66f6fc749282e4589e3ea6d85e2458/warm-flow-ui/src/components/design/common/vue/nodeExtList.vue",
+    "patch": {
+      "diff": "@@ -1,7 +1,7 @@\n <template>\n     <el-form ref=\"nodeExtRef\" class=\"nodeExtForm\" :model=\"form\" label-width=\"150px\" size=\"small\" :disabled=\"disabled\"\n              label-position=\"left\">\n-        <el-form-item :label=\"`${item.label}：`\" :prop=\"item.code\" v-for=\"(item, index) in formList\" 10key=\"index\"\n+        <el-form-item :label=\"`${item.label}：`\" :prop=\"item.code\" v-for=\"(item, index) in formList\" :key=\"index\"\n                       :rules=\"[{ required: item.must, message: `${item.label}不能为空`, trigger: ['blur', 'change'] }]\">\n             <template #label>\n                 <span>{{ item.label }}</span>\n",
+      "new_path": "warm-flow-ui/src/components/design/common/vue/nodeExtList.vue",
+      "old_path": "warm-flow-ui/src/components/design/common/vue/nodeExtList.vue",
+      "a_mode": "100644",
+      "b_mode": "100644",
+      "new_file": false,
+      "renamed_file": false,
+      "deleted_file": false,
+      "too_large": false
+    }
+  }
+]

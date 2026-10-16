@@ -3,7 +3,9 @@ Classifying code PR into certain types by JEV model
 
 这是一个 PR 单分类原型：输入 GitHub、Gitee、GitCode 或 AtomGit 的公开 PR 链接，服务端读取标题、描述和改动文件，调用 TypeSafe Jev 官方 API；网页显示一个主要类别、七类概率及 API 返回的 confidence。
 
-固定类别为：修复缺陷、增加特性、示例/教程、功能测试、代码重构、运行环境、代码增强。首版定义和边界在 `lib/rubric.ts`；这是待用平台样本验证的初始口径。混合 PR 按主要目的归类，功能或修复附带的文档/测试不单独改变主类别。
+固定类别为：修复缺陷、增加特性、示例/教程、功能测试、代码重构、运行环境、代码增强。当前定义和边界为用户提供的 `pr-seven-types-v2`，位于 `lib/rubric.ts`。混合 PR 按主要目的归类，功能或修复附带的文档/测试不单独改变主类别。
+
+2026-10-16 更新：采用完整 v2 分类指令及七类定义。详见 [数据流与全部 API 字段](docs/data-flow.md)；其中包含真实 Gitee PR #388 的源响应、归一化记录、完整模型 state 和完整 v2 TypeSafe 请求示例，密钥以占位符表示。
 
 **本次真实联调的限制：**当前本机向 TypeSafe 发出的请求返回 HTTP 451，响应说明 `Typesafe is not available in your region.`，因此未取得真实分类概率，也不能据此认定 API key 无效。原型会显示该错误，成功路径没有接入演示数据。代码、模拟契约测试和真实 PR 内容读取仍可验证。API 调用可用性需要在 TypeSafe 支持的服务环境和账户条件下确认。
 

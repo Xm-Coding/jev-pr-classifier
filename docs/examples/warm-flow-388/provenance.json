@@ -1,0 +1,20 @@
+{
+  "rubricVersion": "pr-seven-types-v2",
+  "sourceMetadata": {
+    "url": "https://gitee.com/api/v5/repos/dromara/warm-flow/pulls/388",
+    "status": 200,
+    "effective_url": "https://gitee.com/api/v5/repos/dromara/warm-flow/pulls/388",
+    "curl_exit": 0,
+    "fetched_at": "2026-10-16T04:06:40.395147+00:00",
+    "bytes": 11748
+  },
+  "sourceFiles": {
+    "url": "https://gitee.com/api/v5/repos/dromara/warm-flow/pulls/388/files",
+    "status": 200,
+    "effective_url": "https://gitee.com/api/v5/repos/dromara/warm-flow/pulls/388/files",
+    "curl_exit": 0,
+    "fetched_at": "2026-10-16T04:06:43.767063+00:00",
+    "bytes": 1495
+  },
+  "note": "Source responses were fetched from the live public Gitee API. Current code was replayed on these responses to reconstruct source request fields, PRRecord, prepared state and the exact serialized TypeSafe request. No model inference or real credential was used by this capture script. A separate live workbench response is recorded only after a successful hosted call."
+}

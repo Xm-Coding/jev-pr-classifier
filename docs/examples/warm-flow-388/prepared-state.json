@@ -1,0 +1,27 @@
+{
+  "state": {
+    "pr": {
+      "title": "【轻量级 PR】：update warm-flow-ui/src/components/design/common/vue/nodeExtList.vue.",
+      "description": "前端无限报错问题修复",
+      "files": [
+        {
+          "path": "warm-flow-ui/src/components/design/common/vue/nodeExtList.vue",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "diff": "@@ -1,7 +1,7 @@\n <template>\n     <el-form ref=\"nodeExtRef\" class=\"nodeExtForm\" :model=\"form\" label-width=\"150px\" size=\"small\" :disabled=\"disabled\"\n              label-position=\"left\">\n-        <el-form-item :label=\"`${item.label}：`\" :prop=\"item.code\" v-for=\"(item, index) in formList\" 10key=\"index\"\n+        <el-form-item :label=\"`${item.label}：`\" :prop=\"item.code\" v-for=\"(item, index) in formList\" :key=\"index\"\n                       :rules=\"[{ required: item.must, message: `${item.label}不能为空`, trigger: ['blur', 'change'] }]\">\n             <template #label>\n                 <span>{{ item.label }}</span>\n"
+        }
+      ]
+    },
+    "input_quality": {
+      "total_changed_files": 1,
+      "provided_files": 1,
+      "diff_complete": true,
+      "truncated": false
+    }
+  },
+  "warnings": [],
+  "inputComplete": true,
+  "contextMode": "standard",
+  "requestBytes": 10278
+}

@@ -1,0 +1,22 @@
+[
+  {
+    "method": "GET",
+    "url": "https://gitee.com/api/v5/repos/dromara/warm-flow/pulls/388",
+    "headers": {
+      "Accept": "application/json",
+      "User-Agent": "Jev-PR-Classifier/1.0"
+    },
+    "redirect": "manual",
+    "timeoutMs": 25000
+  },
+  {
+    "method": "GET",
+    "url": "https://gitee.com/api/v5/repos/dromara/warm-flow/pulls/388/files",
+    "headers": {
+      "Accept": "application/json",
+      "User-Agent": "Jev-PR-Classifier/1.0"
+    },
+    "redirect": "manual",
+    "timeoutMs": 25000
+  }
+]
