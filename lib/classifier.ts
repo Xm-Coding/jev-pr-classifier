@@ -145,6 +145,6 @@ export async function handleClassify(request: Request, config: RuntimeConfig, fe
   } catch (error) {
     const e = error instanceof AppError ? error : new AppError("INTERNAL_ERROR", "分析暂时失败，请稍后重试。", 500);
     const stage = e.code.startsWith("JEV_") || e.code === "KEY_NOT_CONFIGURED" ? "jev" : e.code.startsWith("SOURCE_") || e.code === "PR_NOT_FOUND" || e.code === "PR_TOO_LARGE" ? "pr_source" : "request";
-    return Response.json({ error: { code: e.code, message: e.message, stage, requestId } }, { status: e.status, headers: responseHeaders });
+    return Response.json({ error: { code: e.code, message: e.message, stage, requestId, ...(e.details ? { details: e.details } : {}) } }, { status: e.status, headers: responseHeaders });
   }
 }

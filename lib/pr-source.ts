@@ -40,14 +40,14 @@ export function contributionLabel(location: ContributionLocation): string {
   return location.kind === "commit" ? `Commit ${location.sha.slice(0, 12)}` : `PR #${location.number}`;
 }
 
-async function readBounded(response: Response): Promise<string> {
+async function readBounded(response: Response, limit = MAX_RESPONSE_BYTES): Promise<string> {
   if (!response.body) return "";
   const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let total = 0;
   try {
     while (true) {
       const { done, value } = await reader.read(); if (done) break;
       total += value.byteLength;
-      if (total > MAX_RESPONSE_BYTES) { await reader.cancel(); throw new AppError("PR_TOO_LARGE", "贡献响应过大，请先在平台中整理 diff 后接入分类。", 413); }
+      if (total > limit) { await reader.cancel(); throw new AppError("PR_TOO_LARGE", "源码单次响应超过 6 MB 读取上限，未使用不完整响应进行分类。", 413); }
       chunks.push(value);
     }
   } finally { reader.releaseLock(); }
@@ -61,11 +61,21 @@ async function sourceRequest(url: string, label: string, headers: Record<string,
   try { response = await fetcher(url, { headers, redirect: "manual", signal: AbortSignal.timeout(25_000) }); }
   catch { throw new AppError("SOURCE_UNAVAILABLE", `${label} 暂时无法连接，请稍后重试。`, 502); }
   if (!response.ok) {
-    if (response.status === 404) throw new AppError("PR_NOT_FOUND", "没有找到这个 PR 或 Commit，或仓库并非公开可访问。", 404);
+    let hint = "";
+    // Inspect only a bounded hint to distinguish failures. Never expose upstream bodies or URLs containing credentials.
+    try { hint = await readBounded(response, 4096); } catch { /* retain the HTTP status if the body is too large */ }
+    const reason = response.status === 429 || /rate[ -_]?limit|rate limit exceeded/i.test(hint) ? "rate_limit"
+      : response.status === 401 ? "authentication"
+      : /PDF or PS header bytes/i.test(hint) ? "content_restriction"
+      : response.status === 403 && /insufficient.{0,30}(scope|permission)|权限不足/i.test(hint) ? "permission"
+      : response.status >= 300 && response.status < 400 && /\/login(?:[/?]|$)/.test(response.headers.get("location") || "") ? "login_required" : "access_denied";
+    const details = { httpStatus: response.status, reason };
+    if (response.status === 404) throw new AppError("PR_NOT_FOUND", "没有找到这个 PR 或 Commit，或仓库并非公开可访问（HTTP 404）。", 404, details);
     if (response.status === 401 || response.status === 403 || response.status === 429) {
-      throw new AppError("SOURCE_ACCESS_LIMIT", `${label} 拒绝了读取请求或已达到访问限制。私有仓库及高频访问需要在服务端配置对应平台的访问令牌。`, 502);
+      const explanation = { rate_limit: "达到访问限额，请等待限额恢复或配置对应平台令牌。", authentication: "身份验证失败，请检查对应平台令牌。", permission: "令牌缺少所需的仓库读取权限。", content_restriction: "公开内容入口拒绝展示包含 PDF/PS 字节的响应，请优先使用提交 API。", access_denied: "拒绝了读取请求；仅凭此状态不能判断是限流还是权限限制。" };
+      throw new AppError("SOURCE_ACCESS_LIMIT", `${label} 返回 HTTP ${response.status}：${explanation[reason as keyof typeof explanation] || explanation.access_denied}`, 502, details);
     }
-    throw new AppError("SOURCE_ERROR", `${label} 返回 ${response.status}，暂时无法读取 PR。`, 502);
+    throw new AppError("SOURCE_ERROR", `${label} 返回 HTTP ${response.status}，${reason === "login_required" ? "入口要求登录，未跟随跳转。" : "暂时无法读取贡献。"}`, 502, details);
   }
   const text = await readBounded(response);
   if (!json) return text;
@@ -82,10 +92,38 @@ export function normalizeFile(raw: Record<string, any>): PRFile {
 export function parseUnifiedDiff(diff: string): Map<string, string> {
   const result = new Map<string, string>();
   for (const block of diff.split(/(?=^diff --git )/m)) {
-    const name = block.match(/^\+\+\+ b\/(.+)$/m)?.[1] ?? block.match(/^--- a\/(.+)$/m)?.[1];
-    if (name) result.set(name.trim(), block);
+    if (!block.startsWith("diff --git ")) continue;
+    const header = block.match(/^diff --git ("(?:\\.|[^"\\])*"|a\/.*?) ("(?:\\.|[^"\\])*"|b\/.*)$/m);
+    const candidates = [block.match(/^\+\+\+ (.+)$/m)?.[1], block.match(/^--- (.+)$/m)?.[1], header?.[2], header?.[1]];
+    const name = candidates.map(decodeGitPath).find(p => p !== null && /^[ab]\//.test(p));
+    if (name) result.set(name.slice(2), block);
   }
   return result;
+}
+
+function decodeGitPath(value: string | undefined): string | null {
+  if (!value) return null;
+  if (!value.startsWith('"')) return value;
+  if (!value.endsWith('"')) return null;
+  const bytes: number[] = [], encoder = new TextEncoder();
+  const escapes: Record<string, number> = { a: 7, b: 8, f: 12, n: 10, r: 13, t: 9, v: 11, '\\': 92, '"': 34 };
+  for (let i = 1; i < value.length - 1; i++) {
+    if (value[i] === "\\") {
+      const octal = value.slice(i + 1, i + 4);
+      if (/^[0-7]{3}$/.test(octal)) { const b = parseInt(octal, 8); if (b > 255) return null; bytes.push(b); i += 3; }
+      else { const b = escapes[value[++i]]; if (b === undefined) return null; bytes.push(b); }
+    } else { const character = String.fromCodePoint(value.codePointAt(i)!); bytes.push(...encoder.encode(character)); i += character.length - 1; }
+  }
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes)); } catch { return null; }
+}
+
+function fallbackFailure(errors: { step: string; error: unknown }[]): AppError {
+  const attempts = errors.map(({ step, error }) => {
+    const e = error instanceof AppError ? error : new AppError("SOURCE_UNAVAILABLE", "源码连接失败。", 502);
+    return { step, code: e.code, message: e.message, ...(e.details?.httpStatus ? { httpStatus: e.details.httpStatus } : {}) };
+  });
+  const last = errors.at(-1)!.error;
+  return new AppError("SOURCE_FALLBACK_FAILED", attempts.map(a => `${a.step}：${a.message}`).join("；"), last instanceof AppError ? last.status : 502, { attempts });
 }
 
 export async function fetchPR(location: PRLocation, config: RuntimeConfig, fetcher: Fetcher = fetch): Promise<PRRecord> {
@@ -93,7 +131,7 @@ export async function fetchPR(location: PRLocation, config: RuntimeConfig, fetch
   catch (error) {
     // Public pages are a separate public data source. Never send credentials to them.
     if (location.provider !== "github" || config.githubToken || !(error instanceof AppError) || error.code !== "SOURCE_ACCESS_LIMIT") throw error;
-    try { return await fetchGitHubPublic(location, fetcher); } catch { throw error; }
+    try { return await fetchGitHubPublic(location, fetcher); } catch (fallback) { throw fallbackFailure([{ step: "GitHub API", error }, { step: "公开网页和 diff", error: fallback }]); }
   }
 }
 
@@ -102,7 +140,16 @@ export async function fetchContribution(location: ContributionLocation, config: 
   try { return await fetchCommitFromApi(location, config, fetcher); }
   catch (error) {
     if (location.provider !== "github" || config.githubToken || !(error instanceof AppError) || error.code !== "SOURCE_ACCESS_LIMIT") throw error;
-    try { return await fetchGitHubCommitPatch(location, fetcher); } catch { throw error; }
+    try { return await fetchGitHubCommitPatch(location, fetcher); }
+    catch (patchError) {
+      // A .diff omits the binary payloads that make some .patch responses huge or unrenderable.
+      // It has no SHA envelope: only use a full requested SHA and keep identity/parents explicitly unverified.
+      if (location.sha.length === 40 && patchError instanceof AppError && ["PR_TOO_LARGE", "SOURCE_ACCESS_LIMIT", "SOURCE_UNAVAILABLE", "SOURCE_ERROR"].includes(patchError.code)) {
+        try { return await fetchGitHubCommitDiff(location, fetcher); }
+        catch (diffError) { throw fallbackFailure([{ step: "GitHub API", error }, { step: "公开 patch", error: patchError }, { step: "公开 diff", error: diffError }]); }
+      }
+      throw fallbackFailure([{ step: "GitHub API", error }, { step: "公开 patch", error: patchError }]);
+    }
   }
 }
 
@@ -267,6 +314,8 @@ async function fetchCommitFromApi(location: CommitLocation, config: RuntimeConfi
   if (omittedPatch && (provider === "gitee" || provider === "github")) warnings.push("平台标记部分提交 diff 已截断，完整性未能保证。");
   const missing = files.filter(f => !f.patch).length;
   if (missing) warnings.push(`${missing} 个提交文件没有文本 diff（可能是二进制或平台省略了内容）。`);
+  const binaryOnly = files.filter(f => /^(?:Binary files .* differ|GIT binary patch)$/m.test(f.patch) && !/^@@ /m.test(f.patch)).length;
+  if (binaryOnly) warnings.push(`${binaryOnly} 个提交文件只有二进制变更信息，无法取得文本内容，请人工复核。`);
   if (!files.length) throw new AppError("SOURCE_NO_CHANGES", "该提交没有返回可分类的文件改动；不会仅凭标题生成分类。", 422);
   const message = String(meta.commit?.message ?? meta.message ?? "");
   if (!message.trim()) warnings.push("平台未返回提交说明，分类仅依据文件改动。");
@@ -300,5 +349,16 @@ async function fetchGitHubCommitPatch(location: CommitLocation, fetcher: Fetcher
     state: "committed", headSha: sha, baseSha: null, comparison: "unknown",
     files: files.slice(0, 300), changedFiles: files.length, additions: null, deletions: null,
     diffComplete: false, warnings: ["GitHub API 读取受限，使用公开提交 patch；父提交和 API 元数据未验证，请人工复核。", ...(files.length > 300 ? ["提交超过 300 个文件，文件列表已截取。"] : [])],
+  };
+}
+
+async function fetchGitHubCommitDiff(location: CommitLocation, fetcher: Fetcher): Promise<PRRecord> {
+  const text = await sourceRequest(location.url + ".diff", "GitHub 公开提交 diff", { Accept: "text/plain", "User-Agent": "Jev-PR-Classifier/1.0" }, fetcher, false);
+  const files = filesFromDiff(text);
+  if (!files.length) throw new AppError("SOURCE_FORMAT", "公开提交 diff 中没有可读取的文件改动。", 502);
+  return {
+    location, title: `Commit ${location.sha.slice(0, 12)}`, description: "", state: "committed", headSha: null, baseSha: null, comparison: "unknown",
+    files: files.slice(0, 300), changedFiles: files.length, additions: null, deletions: null,
+    diffComplete: false, warnings: ["GitHub API 和公开 patch 读取失败，使用请求提交 URL 的公开 diff；提交 SHA 元数据、说明和父提交未验证，请人工复核。", ...(files.length > 300 ? ["提交超过 300 个文件，文件列表已截取。"] : [])],
   };
 }

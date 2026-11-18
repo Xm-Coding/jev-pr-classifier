@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseContributionUrl, parsePRUrl, fetchContribution, contributionLabel } from "../lib/pr-source.ts";
+import { parseContributionUrl, parsePRUrl, fetchContribution, contributionLabel, parseUnifiedDiff } from "../lib/pr-source.ts";
 import { prepareState, handleClassify } from "../lib/classifier.ts";
 import { parseBatchInput, batchToCsv } from "../lib/batch.ts";
-import { CATEGORIES, CLASSIFICATION_QUESTION } from "../lib/rubric.ts";
+import { CATEGORIES, CLASSIFICATION_QUESTION, RUBRIC_VERSION } from "../lib/rubric.ts";
 
 const sha = "abcdef12".repeat(5);
 const parent = "1".repeat(40);
@@ -84,6 +84,11 @@ test("truncated provider patches and the 300-file cap remain incomplete", async 
   assert.equal(truncated.diffComplete, false); assert.ok(truncated.warnings.length);
   const capped = await fetchContribution(location(), {}, async () => Response.json(meta(Array.from({ length: 100 }, (_, i) => file(i)))));
   assert.equal(capped.files.length, 300); assert.equal(capped.diffComplete, false);
+  const binary = await fetchContribution(location(), {}, async (_url, options) => options.headers.Accept === 'application/vnd.github.diff'
+    ? new Response('diff --git a/logo.png b/logo.png\nBinary files a/logo.png and b/logo.png differ\n')
+    : Response.json(meta([{ ...file(), filename: 'logo.png', patch: undefined }])));
+  assert.equal(binary.files[0].path, 'logo.png'); assert.equal(binary.diffComplete, false);
+  assert.ok(binary.warnings.some(w => /二进制变更/.test(w)));
 });
 
 test("anonymous GitHub commit fallback verifies patch SHA and always requests review", async () => {
@@ -98,7 +103,68 @@ test("anonymous GitHub commit fallback verifies patch SHA and always requests re
   assert.equal(calls, 1);
 });
 
-test("commit classification sends v2 rules with commit scope and returns a truthful contribution identity", async () => {
+test("Git diff decodes quoted UTF-8 paths and retains renamed, deleted and binary files", () => {
+  const quoted = String.raw`diff --git "a/\346\226\207\346\241\243/a.txt" "b/\346\226\207\346\241\243/a.txt"
+--- "a/\346\226\207\346\241\243/a.txt"
++++ "b/\346\226\207\346\241\243/a.txt"
+@@ -1 +1 @@
+-old
++new
+`;
+  const renamed = 'diff --git "a/old name.txt" "b/new name.txt"\nsimilarity index 100%\nrename from old name.txt\nrename to new name.txt\n';
+  const binary = 'diff --git a/logo.png b/logo.png\nBinary files a/logo.png and b/logo.png differ\n';
+  const deleted = 'diff --git a/gone.txt b/gone.txt\ndeleted file mode 100644\n--- a/gone.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-old\n';
+  assert.deepEqual([...parseUnifiedDiff(quoted + renamed + binary + deleted).keys()], ['文档/a.txt', 'new name.txt', 'logo.png', 'gone.txt']);
+});
+
+test("oversized public patch falls back to small diff without claiming verified metadata", async () => {
+  const seen = [];
+  const record = await fetchContribution(location(), {}, async url => {
+    seen.push(String(url));
+    if (String(url).startsWith('https://api.github.com')) return new Response('API rate limit exceeded', { status: 403 });
+    if (String(url).endsWith('.patch')) return new Response('x'.repeat(6_000_001));
+    assert.equal(String(url), location().url + '.diff'); return new Response(diff(0));
+  });
+  assert.equal(seen.length, 3); assert.equal(record.files[0].path, 'src/file0.ts');
+  assert.equal(record.headSha, null); assert.equal(record.comparison, 'unknown');
+  assert.equal(prepareState(record, 'jev-1.14.0').inputComplete, false);
+  assert.match(record.warnings[0], /SHA.*未验证/);
+});
+
+test("PDF content refusal on public patch can recover through public diff", async () => {
+  const record = await fetchContribution(location(), {}, async (url, options) => {
+    assert.equal(options.headers.Authorization, undefined);
+    if (String(url).startsWith('https://api.github.com')) return new Response(null, { status: 429 });
+    if (String(url).endsWith('.patch')) return new Response('Content containing PDF or PS header bytes cannot be rendered from this domain for security reasons.', { status: 403 });
+    return new Response(diff(0));
+  });
+  assert.equal(record.files.length, 1); assert.equal(record.diffComplete, false);
+});
+
+test("failed source fallbacks preserve each HTTP status and do not disclose upstream bodies", async () => {
+  await assert.rejects(fetchContribution(location(), {}, async url => {
+    if (String(url).startsWith('https://api.github.com')) return new Response('API rate limit exceeded source-secret', { status: 403 });
+    if (String(url).endsWith('.patch')) return new Response('PDF or PS header bytes source-secret', { status: 403 });
+    return new Response(null, { status: 302, headers: { Location: 'https://github.com/login?access_token=source-secret' } });
+  }), error => {
+    assert.equal(error.code, 'SOURCE_FALLBACK_FAILED');
+    assert.deepEqual(error.details.attempts.map(x => x.httpStatus), [403, 403, 302]);
+    assert.match(error.message, /访问限额/); assert.match(error.message, /PDF\/PS/); assert.match(error.message, /登录/);
+    assert.ok(!JSON.stringify({ message: error.message, details: error.details }).includes('source-secret'));
+    return true;
+  });
+});
+
+test("mismatched patch identity fails closed without using an unverified diff", async () => {
+  let calls = 0;
+  await assert.rejects(fetchContribution(location(), {}, async url => {
+    calls++;
+    return String(url).startsWith('https://api.github.com') ? new Response(null, { status: 403 }) : new Response(`From ${'9'.repeat(40)} Mon Sep 17 00:00:00 2001\nSubject: [PATCH] Wrong commit\n\n${diff(0)}`);
+  }), e => e.code === 'SOURCE_FALLBACK_FAILED' && /SHA/.test(e.message));
+  assert.equal(calls, 2);
+});
+
+test("commit classification sends current rules with commit scope and returns a truthful contribution identity", async () => {
   const request = new Request("https://site.test/api/classify", { method: "POST", body: JSON.stringify({ url: location().url }) });
   const response = await handleClassify(request, { apiKey: "jev-secret" }, async (url, options) => {
     if (String(url).includes("typesafe.ai")) {
@@ -114,6 +180,6 @@ test("commit classification sends v2 rules with commit scope and returns a truth
   });
   const result = await response.json(); assert.equal(response.status, 200);
   assert.equal(result.pr.location.kind, "commit"); assert.equal(result.pr.location.sha, sha); assert.equal(result.pr.location.number, undefined);
-  assert.equal(result.rubricVersion, "pr-seven-types-v2"); assert.ok(!JSON.stringify(result).includes("jev-secret")); assert.ok(!JSON.stringify(result).includes("+fixed"));
+  assert.equal(result.rubricVersion, RUBRIC_VERSION); assert.ok(!JSON.stringify(result).includes("jev-secret")); assert.ok(!JSON.stringify(result).includes("+fixed"));
   assert.ok(batchToCsv([{ id: "commit", url: location().url, status: "success", result }], .85).includes(`"Commit","${sha}","first-parent"`));
 });

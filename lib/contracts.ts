@@ -19,7 +19,11 @@ export interface AnalysisResult {
   pr: Omit<PRRecord, "files" | "description" | "warnings" | "diffComplete"> & { files: Omit<PRFile, "patch">[] };
   warnings: string[]; inputComplete: boolean; contextMode: "standard" | "long"; requestBytes: number; elapsedMs: number; fetchMs: number; inferenceMs: number;
 }
+export interface SourceDiagnostics {
+  httpStatus?: number; reason?: string;
+  attempts?: { step: string; code: string; message: string; httpStatus?: number }[];
+}
 export class AppError extends Error {
-  code: string; status: number;
-  constructor(code: string, message: string, status = 400) { super(message); this.code = code; this.status = status; }
+  code: string; status: number; details?: SourceDiagnostics;
+  constructor(code: string, message: string, status = 400, details?: SourceDiagnostics) { super(message); this.code = code; this.status = status; this.details = details; }
 }
