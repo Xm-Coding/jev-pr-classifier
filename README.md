@@ -5,37 +5,44 @@ Classifying code PR into certain types by JEV model
 
 Commit 输入使用 `/commit/{sha}`，SHA 支持 7–40 位十六进制并由源 API 解析、核验为完整 SHA。单次提交只分类它的净改动，不查找或扩展为关联 PR。合并提交以第一父提交为比较基准；初始提交与空树比较。结果、复制内容和批量 CSV 均区分 PR/Commit，并保留完整 SHA。历史数据中多余的连续斜杠会在链接解析时规范化。
 
-2026-10-16 已用历史文件中三个平台的实际 commit 验证来源读取：RocketMQ Dashboard 的示例提交读到 3 个文件，Gitee 示例 2 个，GitCode 示例 3 个。GitCode 元数据请求须加 `show_diff=true`，文件正文从专用 `/repos/{owner}/{repo}/commit/{sha}/diff` 读取；仅改变 URL 正则不足以获得分类证据。GitHub Commit 支持分页，原型仍最多保留 300 个文件；平台截断、缺失 diff 和匿名公开 patch 降级均要求复核。
+GitCode 元数据请求须加 `show_diff=true`，文件正文从专用 `/repos/{owner}/{repo}/commit/{sha}/diff` 读取；仅改变 URL 正则不足以获得分类证据。GitHub Commit 支持分页，原型仍最多保留 300 个文件；平台截断、缺失 diff 和匿名公开 patch 降级均要求复核。
 
-批量功能同时接受 PR 与 Commit，仍限每批 50 条、并发 2 条；10,652 条历史贡献需分批提交。它没有后台持久队列或一键整表跑完能力。API 仍使用 `/api/classify` 和兼容的响应字段 `pr`，以 `pr.location.kind` 区分对象；Jev 输入中的 `pr.source_type="commit"`、`pr.comparison`、`pr.parent_count` 说明提交范围。用户的七类 v2 定义保持不变，仅对 commit 请求附加范围指令。
+批量功能同时接受 PR 与 Commit，仍限每批 50 条、并发 2 条；10,652 条历史贡献需分批提交。它没有后台持久队列或一键整表跑完能力。API 仍使用 `/api/classify` 和兼容的响应字段 `pr`，以 `pr.location.kind` 区分对象；Jev 输入中的 `pr.source_type="commit"`、`pr.comparison`、`pr.parent_count` 说明提交范围。类别定义随当前 rubric 版本更新，commit 请求额外附加范围指令。
 
-固定类别为：修复缺陷、增加特性、示例/教程、功能测试、代码重构、运行环境、代码增强。当前定义和边界为用户提供的 `pr-seven-types-v2`，位于 `lib/rubric.ts`。混合 PR 按主要目的归类，功能或修复附带的文档/测试不单独改变主类别。
-
-2026-10-16 更新：采用完整 v2 分类指令及七类定义。详见 [数据流与全部 API 字段](docs/data-flow.md)；其中包含真实 Gitee PR #388 的源响应、归一化记录、完整模型 state 和完整 v2 TypeSafe 请求示例，密钥以占位符表示。
-
-**本次真实联调的限制：**当前本机向 TypeSafe 发出的请求返回 HTTP 451，响应说明 `Typesafe is not available in your region.`，因此未取得真实分类概率，也不能据此认定 API key 无效。原型会显示该错误，成功路径没有接入演示数据。代码、模拟契约测试和真实 PR 内容读取仍可验证。API 调用可用性需要在 TypeSafe 支持的服务环境和账户条件下确认。
-
-2026-10-14 复核：Higress PR #5079 可以完整读取标题、描述及 6 个文件的 diff；本机 TypeSafe 请求仍返回 451。托管站点从本机 curl 访问被 Cloudflare 网关以 403 拒绝，无法由本机验证托管推理结果；这个网络路径与用户浏览器不是同一条，不能认定用户错误也是 403。查询到的生产 Worker 日志只显示页面和配置检查成功，尚无分类请求记录。
+固定类别为：修复缺陷、增加特性、示例/教程、功能测试、代码重构、运行环境、代码增强。当前定义和边界为 `pr-seven-types-v6`，位于 `lib/rubric.ts`。
 
 网页现在分别处理浏览器连接失败、登录跳转、网关非 JSON 响应和模型错误，显示错误码和请求编号，不再直接展示 `Failed to fetch`。登录跳转使用正常顶层导航；服务访问权限不变。`/api/status` 现在会从服务器对配置的模型发出一次很小的真实推理请求，校验响应结构和实际版本；同一 Worker isolate 内缓存 60 秒。它消耗少量输入 tokens，验证模型调用与账户权限，不代表具体 PR 分类已成功。分类请求日志只记录状态、错误码、阶段和请求编号，不记录 Key 或 PR 内容。
 
-排查发现托管代码使用 `redirect: "error"`，在本项目 Cloudflare Worker 运行时（2026-05-15 兼容日期）会直接抛出 `Invalid redirect value`，请求尚未发出。已把源平台与 TypeSafe 请求改为 `manual`；3xx 作为错误处理，禁止自动转发服务端凭据。增加真实 workerd 运行时契约验证，避免仅在 Node.js 中测试导致遗漏。
+## 本地启动
 
-2026-10-15 继续验证：修复后托管服务器已能访问 TypeSafe（模型接口 200），线上分类请求随后失败于 GitHub API 读取限制。现在匿名 GitHub API 被拒绝时，会尝试直接读取公开 PR 网页和 GitHub 公开净 diff；不向这些地址发送任何令牌。页面内嵌元数据须匹配仓库与 PR 编号。备用来源的描述来自渲染文本，未验证的 API 元数据会明确告警并始终建议人工复核；公开页面也不可用时仍报告源平台错误。正式平台应优先使用已有 PR 数据，或配置专用 GitHub 访问凭据，以获得稳定读取与更高额度。
+使用 Node.js 24 和随附的 npm。在仓库根目录安装锁文件指定的依赖。
 
-本地运行需要 Node.js 24（项目测试使用 Node 的原生 TypeScript 支持）。执行：
-
-```sh
-npm install
-read -s 'TYPESAFE_API_KEY?Jev API key: '
-export TYPESAFE_API_KEY
-export TYPESAFE_MODEL=jev-1.14.0
-npm run dev
+```text
+node --version
+npm ci
 ```
 
-上面的隐藏输入写法适用于 macOS 默认 zsh。也可用其他密钥管理方式设置环境变量；不要把密钥加入前端代码或 Git。网页地址为 `http://127.0.0.1:5173/`，本地 API 监听 `127.0.0.1:8788`。Vite 代理 `/api/` 到本地 API，因此浏览器无需持有 Jev 密钥。Ctrl+C 停止开发服务。
+在仓库根目录新建 `.env.classifier.local`，填入自己的 TypeSafe API Key。该文件已被 Git 忽略。
 
-`scripts/with-secrets.mjs` 为自动化提供隐藏 stdin 输入模式，可用于 `check`、`live-test`、`dev`。它不把凭据写入磁盘或命令行。公开 PR 默认不需要源平台令牌；私有仓库或更高频读取可在服务端配置 `GITHUB_TOKEN`、`GITEE_TOKEN`、`GITCODE_TOKEN`、`ATOMGIT_TOKEN`。这些令牌仅发送给对应平台 API。
+```dotenv
+TYPESAFE_API_KEY=你的_TypeSafe_API_Key
+# 可选，省略时使用 jev-1.14.0
+# TYPESAFE_MODEL=jev-1.14.0
+```
+
+公开贡献通常只需 TypeSafe API Key。访问私有仓库或提高源码读取额度时，可按需在同一文件中配置 `GITHUB_TOKEN`、`GITEE_TOKEN`、`GITCODE_TOKEN` 或 `ATOMGIT_TOKEN`。运行环境需要能访问 TypeSafe API 和对应的源码平台。
+
+用以下命令读取本地配置并启动。macOS、Linux 和 Windows 可使用同一条命令。
+
+```text
+node --env-file=.env.classifier.local scripts/start-local.mjs
+```
+
+如果已通过系统环境变量或密钥管理工具配置 `TYPESAFE_API_KEY`，可以直接运行 `npm run dev`。
+
+启动后打开 <http://127.0.0.1:5173/>，粘贴 PR 或 Commit 链接即可分析。本地 API 地址为 `http://127.0.0.1:8788`，网页会转发 `/api/` 请求。按 `Ctrl+C` 停止服务。
+
+### 测试与构建
 
 ```sh
 npm test
@@ -44,6 +51,8 @@ npm run build
 ```
 
 生产构建使用 Vinext / Cloudflare Workers，`app/api/classify/route.ts` 从运行时环境读取服务端密钥。托管时需要把 `TYPESAFE_API_KEY` 配成 secret。`.openai/hosting.json` 只包含 Site 身份与部署配置，不包含密钥。
+
+## 使用说明
 
 公开示例链接：
 
@@ -56,7 +65,7 @@ npm run build
 
 处理 PR 时移除无效控制字符和描述中的 HTML 注释，保留代码注释、文档和字符串作为分类证据；通过固定问题把 PR 数据与分类规则分开。清洗与提示规则只能降低输入干扰，不能保证免疫提示注入。不会执行 PR 中的代码。标题、描述、路径和 diff 经 JSON 序列化放入 `state`，分类问题和七类定义放入 `questions.pr_category.instructions` 与 `criteria`。
 
-请求使用 `POST https://api.typesafe.ai/v1/systemone`，服务端 Bearer 鉴权，当前固定模型 `jev-1.14.0`。页面直接采用 `choice`、`probabilities` 和 `confidence`，不会自行补造、重归一化或根据文字生成概率。[官方 API](https://docs.typesafe.ai/api)、[模型与限制](https://docs.typesafe.ai/models)、[介绍](https://docs.typesafe.ai/introduction)。
+请求使用 `POST https://api.typesafe.ai/v1/systemone`，服务端 Bearer 鉴权，当前固定模型 `jev-1.14.0`。页面采用 `choice`、`probabilities` 和 `confidence`。[官方 API](https://docs.typesafe.ai/api)、[模型与限制](https://docs.typesafe.ai/models)、[介绍](https://docs.typesafe.ai/introduction)。
 
 Choice confidence 的官方公式是 `(p_max - 1/n) / (1 - 1/n)`。这里固定七类，最高类别概率 87% 对应 confidence 约 84.83%；confidence 87% 对应最高概率约 88.86%。它描述概率分布集中程度，不能直接解释为业务判断正确率。[官方置信度说明](https://docs.typesafe.ai/confidence)。
 
@@ -71,8 +80,6 @@ Choice confidence 的官方公式是 `(p_max - 1/n) / (1 - 1/n)`。这里固定�
 - `tests/classifier.test.mjs`：跨平台格式、分页、输入预算、凭据隔离、响应契约及地区错误测试。
 
 输入预算采用保守的 UTF-8 字节上限，不依赖未经验证的 token 估算。大 PR 的 diff 会按预算截取，原始 API confidence 不会因此被人为降低，页面另外标出输入不完整。正式平台接入可把已存储的完整 PR 数据接入 `prepareState` 与 `callJev`，无需重复爬取链接。
-
-2026-10-15 模型升级：固定使用 `jev-1.14.0`。官方文档列出的最新版于 10 月 14 日发布，`jev-preview` 指向 1.14，`jev-latest` 仍指向 1.13；固定编号避免别名变化影响评测。两版默认均为每请求 64k tokens、每问题 32k tokens；发送 `TypeSafe-Danger-Zone-Long-Context: true` 后两项均为 262k tokens。长上下文按相同 token 单价计费，但官方提示会更慢且准确率下降。
 
 应用采用自动模式：完整 JSON 请求在 28,000 UTF-8 字节以内不加长上下文请求头；超过后启用长上下文，应用保守上限为 224,000 字节。这些是应用的字节预算，不是模型 token 上限，也不意味着已验证 262k tokens 的完整容量。预算内完整保留已读取的标题、描述和 diff，取消原先每文件 6 KB 的额外截取；超过应用预算仍暂按文件分配并截取，明确警告并要求复核。语义证据筛选与恶意注释隔离尚未实现，读取端 300 文件等限制仍存在。
 
